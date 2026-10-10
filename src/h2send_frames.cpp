@@ -124,7 +124,7 @@ dd::task<void> update_window_to_max(cfint_t& size, stream_id_t streamid, h2conne
   if (size != MAX_WINDOW_SIZE) [[likely]] {
     static_assert(std::numeric_limits<uint32_t>::max() > MAX_WINDOW_SIZE);
     uint32_t inc = uint32_t(MAX_WINDOW_SIZE - size);
-    if (co_await send_window_update(con, 0, inc))
+    if (co_await send_window_update(con, streamid, inc))
       increment_window_size_trusted(size, int32_t(inc));
   }
 } catch (std::exception& e) {
