@@ -105,9 +105,11 @@ dd::task<bool> send_window_update(h2connection_ptr con, stream_id_t id, uint32_t
   co_return !ec;
 }
 
-// sends WINDOW_UPDATE correctly to set window size to max
-dd::task<void> update_window_to_max(cfint_t& size, stream_id_t streamid, h2connection_ptr con) try {
+// sends WINDOW_UPDATE correctly to set window size to max; node=nullptr for connection-level
+dd::task<void> update_window_to_max(stream_ptr node, h2connection_ptr con) try {
   assert(con);
+  stream_id_t streamid = node ? node->streamid : 0;
+  cfint_t& size = node ? node->rl_streamlevel_windowsize : con->my_window_size;
   // its possible to have < 0 in such cases like
   // * sending DATA before settings exchange
   // * updating settings value SETTINGS_INITIAL_WINDOW_SIZE

@@ -154,7 +154,7 @@ void h2stream::receive_response_data(h2frame frame) {
   };
   decrease_window_size(rl_streamlevel_windowsize, int32_t(frame.header.length), logctx());
   if (rl_streamlevel_windowsize < MAX_WINDOW_SIZE / 2 && !(frame.header.flags & flags::END_STREAM))
-    update_window_to_max(rl_streamlevel_windowsize, streamid, connection).start_and_detach();
+    update_window_to_max(stream_ptr(this), connection).start_and_detach();
 
   if (on_data_part_fn)
     (*on_data_part_fn)(frame.data, (frame.header.flags & flags::END_STREAM));
@@ -196,7 +196,7 @@ void h2stream::receive_request_data(h2frame frame) {
 
   decrease_window_size(rl_streamlevel_windowsize, int32_t(frame.header.length), logctx());
   if (rl_streamlevel_windowsize < MAX_WINDOW_SIZE / 2 && !(frame.header.flags & flags::END_STREAM))
-    update_window_to_max(rl_streamlevel_windowsize, streamid, connection).start_and_detach();
+    update_window_to_max(stream_ptr(this), connection).start_and_detach();
 
   if (is_half_closed())
     throw stream_error(errc_e::STREAM_CLOSED, streamid, "stream already assembled");
