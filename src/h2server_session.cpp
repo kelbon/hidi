@@ -58,8 +58,8 @@ struct response_bro {
     req.body.data = std::move(rsp.body);
     req.headers = std::move(rsp.headers);
     // must not contain ":status" or other pseudoheaders
-    assert(std::find_if(rsp.headers.begin(), rsp.headers.end(),
-                        [](http_header_t& h) { return h.name().starts_with(':'); }) == rsp.headers.end());
+    assert(std::find_if(req.headers.begin(), req.headers.end(),
+                        [](http_header_t& h) { return h.name().starts_with(':'); }) == req.headers.end());
     return req;
   }
 };

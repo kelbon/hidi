@@ -654,8 +654,10 @@ dd::task<void> h2connection::receive_headers_with_continuation(h2frame frame, io
                                        e2str(frame.header.type)));
     }
     if (frame.header.length + bytes.size() > max_continuation_len) {
-      throw stream_error(errc_e::REFUSED_STREAM, frame.header.streamid,
-                         std::format("CONTINUATION too big, limit: {} bytes", max_continuation_len));
+      // protocol_error (GOAWAY): the frame body is not yet read,
+      // so a stream-level RST would leave unread bytes in the socket and desync framing.
+      throw protocol_error(errc_e::ENHANCE_YOUR_CALM,
+                           std::format("CONTINUATION too big, limit: {} bytes", max_continuation_len));
     }
     // read frame data
     bytes.resize(bytes.size() + frame.header.length);
