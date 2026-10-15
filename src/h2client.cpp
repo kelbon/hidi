@@ -344,7 +344,7 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
 
       // connection control flow (streamlevel in handle_frame)
       if (con.my_window_size < MAX_WINDOW_SIZE / 2)
-        co_await update_window_to_max(con.my_window_size, 0, c);
+        co_await update_window_to_max(nullptr, c);
     }
   } catch (hpack::protocol_error& e) {
     HTTP2_LOG(c->logctx, ERROR, "exception while decoding headers block (HPACK), err: {}", e.what());
