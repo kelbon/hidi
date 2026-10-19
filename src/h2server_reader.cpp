@@ -145,7 +145,7 @@ dd::task<int> start_server_reader_for(h2server_session& session) try {
 
     // connection control flow (streamlevel in server_handle_frame)
     if (con.my_window_size < MAX_WINDOW_SIZE / 2)
-      co_await update_window_to_max(con.my_window_size, 0, &con);
+      co_await update_window_to_max(nullptr, &con);
   }
   unreachable();
 } catch (hpack::protocol_error& e) {

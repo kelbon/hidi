@@ -411,6 +411,10 @@ void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> byt
       if (!s.use_bytes(hval.size())) [[unlikely]]
         goto memory_limit_exceeded;
       req.body.content_type = hval;
+    } else if (header.name == ":protocol") {  // RFC 8441: Extended CONNECT
+      if (!s.use_bytes(hval.size())) [[unlikely]]
+        goto memory_limit_exceeded;
+      req.headers.push_back(http_header_t(":protocol", std::string(hval)));
     } else {
       goto push_header;
     }
