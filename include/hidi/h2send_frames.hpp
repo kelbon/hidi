@@ -26,7 +26,7 @@ dd::task<void> handle_ping(ping_frame ping, h2connection_ptr con);
 // returns false, is window update was not sended
 dd::task<bool> send_window_update(h2connection_ptr con, stream_id_t id, uint32_t inc);
 
-// sends WINDOW_UPDATE correctly to set window size to max
-dd::task<void> update_window_to_max(cfint_t& size, stream_id_t streamid, h2connection_ptr con);
+// sends WINDOW_UPDATE correctly to set window size to max; node=nullptr for connection-level
+dd::task<void> update_window_to_max(stream_ptr node, h2connection_ptr con);
 
 }  // namespace hidi
