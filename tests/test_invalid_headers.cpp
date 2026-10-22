@@ -80,5 +80,9 @@ INVALID_HEADER_TEST("connection, between regular headers", false, true, "connect
 INVALID_HEADER_TEST("transfer-encoding, between regular headers", false, true, "transfer-encoding", "chunked")
 INVALID_HEADER_TEST("TE other than trailers, between regular headers", false, true, "te", "gzip")
 
+INVALID_HEADER_TEST("0x7f in name, between regular headers", false, true, "bad\x7fname", "x")
+INVALID_HEADER_TEST("0x80 in name, between regular headers", false, true, "bad\x80name", "x")
+INVALID_HEADER_TEST("0xff in name, between regular headers", false, true, "bad\xffname", "x")
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;
