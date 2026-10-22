@@ -49,13 +49,7 @@ CLIENT_TEST("client does not open new streams after graceful GOAWAY") {
 
   // graceful shutdown от сервера, A остаётся в работе
   co_await server.send_goaway(/*last_streamid=*/1, errc_e::NO_ERROR);
-  // frame-ы обрабатываются по порядку, поэтому получив ответ на PING знаем, что GOAWAY уже обработан
-  co_await server.send_ping(1);
-  for (;;) {
-    h2test_frame f = co_await server.receive_frame(deadline_after(5s));
-    if (f.hdr.type == frame_e::PING && (f.hdr.flags & flags::ACK))
-      break;
-  }
+  co_await server.sync();
 
   // запрос B, нельзя отправлять в старое соединение
   auto handle_b =

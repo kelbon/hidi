@@ -188,6 +188,32 @@ dd::task<void> test_h2connection::send_pong(uint64_t opaque_data) {
   return send_raw_frame(std::move(bytes));
 }
 
+dd::task<void> test_h2connection::sync(deadline_t deadline, std::source_location loc) {
+  FAKE_HTTP2_LOG(INFO, "");
+  constexpr uint64_t SYNC_VALUE = 137;
+  co_await send_ping(SYNC_VALUE);
+  for (;;) {
+    h2test_frame f = co_await receive_frame(deadline, loc);
+    switch (f.hdr.type) {
+      case frame_e::WINDOW_UPDATE:
+        continue;
+      case frame_e::PING: {
+        ping_frame pf;
+        REQUIRE_NOTHROW(pf = ping_frame::parse(f.hdr, f.data));
+        if (!(f.hdr.flags & flags::ACK)) {
+          // PING-запрос от пира, не ответ на наш: обязаны ответить тем же значением
+          co_await send_pong(pf.get_data());
+          continue;
+        }
+        REQUIRE(pf.get_data() == SYNC_VALUE);
+        co_return;
+      }
+      default:
+        FAIL(std::format("sync: unexpected frame {}, loc: {}", f.hdr, sourceloc_str(loc)));
+    }
+  }
+}
+
 dd::task<h2test_frame> test_h2connection::receive_data(stream_id_t streamid, deadline_t deadline) {
   FAKE_HTTP2_LOG(INFO, "");
 
@@ -452,7 +478,7 @@ dd::task<h2test_frame> test_h2connection::next_frame(deadline_t d, ping_e pingbe
       switch (pingbehavior) {
         case ping_e::RESPONSE:
           if (!(frame.hdr.flags & flags::ACK)) {
-            frame.hdr.flags &= flags::ACK;
+            frame.hdr.flags |= flags::ACK;
             co_await send_frame(std::move(frame));
           }
           continue;

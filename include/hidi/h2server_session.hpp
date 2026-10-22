@@ -100,7 +100,9 @@ struct h2server_session : bi::list_base_hook<bi::link_mode<bi::safe_link>> {
   // h2server_session::request_terminate
   //
   // Note: may accept trailers headers too
-  void start_request_assemble(const h2frame& /*HEADERS frame*/);
+  // второй аргумент - найденный уже существующий поток с этим id (либо nullptr)
+  // нужен только для оптимизации двойного поиска
+  void start_request_assemble(const h2frame& /*HEADERS frame*/, h2stream* existing);
 
   // after creation 3 hooks (requests, responses, timers) and 'task' left unused
   stream_ptr new_empty_stream_node(stream_id_t);
