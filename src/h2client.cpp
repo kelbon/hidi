@@ -105,7 +105,11 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
   co_await std::suspend_always{};  // resumed when needed by creator
 
   if (self->m_connection || !self->m_connectionGate.try_enter()) {
-    self->notify_connection_waiters(self->m_connection);
+    // соединение без свободных stream id (в том числе после graceful GOAWAY) ещё может доживать активные
+    // запросы, но новые стримы на нём открывать нельзя. Ожидающие не получают это соединение, их разбудит
+    // читатель, когда оно завершится: он переподключится (см. `connection_dropped`)
+    if (!self->m_connection || !self->m_connection->is_out_of_streamids())
+      self->notify_connection_waiters(self->m_connection);
     co_return;
   }
   on_scope_exit {
@@ -444,6 +448,7 @@ std::coroutine_handle<> noexport::waiter_of_connection::await_suspend(std::corou
 [[nodiscard]] h2connection_ptr noexport::waiter_of_connection::await_resume() {
   if (!result || result->is_dropped() || client->stop_requested())
     return nullptr;
+  assert(!result->is_out_of_streamids());
   return std::move(result);
 }
 
