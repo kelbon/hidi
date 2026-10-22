@@ -313,7 +313,8 @@ static protocol_error duplicated_pseudoheader(std::string_view name) {
                         std::format("pseudoheader {} appeared on the list twice", name));
 }
 
-static void validate_header_name(const hpack::header_view& h, stream_id_t streamid) {
+// возвращает ошибку строкой
+static std::optional<std::string> validate_header_name(const hpack::header_view& h) {
   std::string_view str = h.name.str();
   // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.1-3.1
   for (int c : str) {
@@ -326,8 +327,7 @@ static void validate_header_name(const hpack::header_view& h, stream_id_t stream
       case ':':
         // websocket, handled here for better hot path
         if (h.name != ":protocol") {
-          throw stream_error(errc_e::PROTOCOL_ERROR, streamid,
-                             std::format("forbidden character 0x{:x} in header name \"{}\")", c, str));
+          return std::format("forbidden character 0x{:x} in header name \"{}\")", c, str);
         }
     }
   }
@@ -339,15 +339,15 @@ static void validate_header_name(const hpack::header_view& h, stream_id_t stream
   if (connection_specific) [[unlikely]] {
     // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.2-2
     if (str != "te")
-      throw stream_error(errc_e::PROTOCOL_ERROR, streamid,
-                         std::format("connection specific header forbidden in HTTP/2, header name: {}", str));
+      return std::format("connection specific header forbidden in HTTP/2, header name: {}", str);
     if (h.value.str() != "trailers")
-      throw stream_error(
-          errc_e::PROTOCOL_ERROR, streamid,
-          std::format("TE header with value other than \"trailers\", actual value: {}", h.value.str()));
+      return std::format("TE header with value other than \"trailers\", actual value: {}", h.value.str());
   }
+  return std::nullopt;
 }
 
+// эта функция должна гарантировать что обработала все хедера, либо бросила protocol_error (GOAWAY)
+// иначе декодер окажется в невалидном состоянии
 void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> bytes) {
   const auto* in = bytes.data();
   const auto* e = in + bytes.size();
@@ -424,7 +424,10 @@ void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> byt
     if (!header)
       continue;
   push_header:
-    validate_header_name(header, s.streamid);
+    if (std::optional<std::string> err = validate_header_name(header)) {
+      hpack::ignore_headers_block(d, in, e);
+      throw stream_error(errc_e::PROTOCOL_ERROR, s.streamid, std::move(*err));
+    }
     if (!s.use_bytes(header.name.str().size() + header.value.str().size())) [[unlikely]]
       goto memory_limit_exceeded;
     req.headers.push_back(http_header_t(std::string(header.name.str()), std::string(header.value.str())));
