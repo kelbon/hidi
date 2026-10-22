@@ -317,7 +317,7 @@ static protocol_error duplicated_pseudoheader(std::string_view name) {
 static std::optional<std::string> validate_header_name(const hpack::header_view& h) {
   std::string_view str = h.name.str();
   // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.1-3.1
-  for (int c : str) {
+  for (unsigned char c : str) {
     switch (c) {
       default:
         continue;
