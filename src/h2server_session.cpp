@@ -268,21 +268,21 @@ stream_ptr h2server_session::new_empty_stream_node(stream_id_t id) {
   return connection->new_stream_node({}, deadline_t::never(), nullptr, nullptr, id);
 }
 
-void h2server_session::start_request_assemble(const h2frame& frame) {
+void h2server_session::start_request_assemble(const h2frame& frame, h2stream* existing) {
   assert(frame.header.type == frame_e::HEADERS);
 
   // if stream already exist, its trailers or error
-  if (auto* r = connection->find_response_by_streamid(frame.header.streamid)) [[unlikely]] {
-    if (r->is_half_closed()) {
+  if (existing) [[unlikely]] {
+    if (existing->is_half_closed()) {
       throw protocol_error(errc_e::PROTOCOL_ERROR,
                            std::format("client initiates stream, which was already open, streamid: {}",
                                        frame.header.streamid));
     } else {
       // trailer headers received
-      r->receive_request_trailers(connection->decoder, frame);
-      assert(r->end_stream_received);  // if not, it must be protocol error
+      existing->receive_request_trailers(connection->decoder, frame);
+      assert(existing->end_stream_received);  // if not, it must be protocol error
       // Note: manages 'node' lifetime
-      on_request_ready(*r);
+      on_request_ready(*existing);
       return;
     }
   }
@@ -369,12 +369,14 @@ void h2server_session::receive_headers(h2frame frame) {
   frame.validate_streamid();
   frame.remove_padding();
   frame.ignore_deprecated_priority();
-  if (new_requests_forbiden) [[unlikely]] {
+  // graceful shutdown запрещает только новые стримы, трейлеры уже идущего стрима обрабатываются как обычно
+  h2stream* existing = connection->find_response_by_streamid(frame.header.streamid);
+  if (new_requests_forbiden && !existing) [[unlikely]] {
     connection->ignore_frame(frame);
     send_rst_stream(connection, frame.header.streamid, errc_e::REFUSED_STREAM).start_and_detach();
     return;
   }
-  start_request_assemble(frame);
+  start_request_assemble(frame, existing);
 }
 
 void h2server_session::receive_data(h2frame frame) {

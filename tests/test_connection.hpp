@@ -174,6 +174,13 @@ struct test_h2connection {
   // sends PING frame answer (ACK == true)
   dd::task<void> send_pong(uint64_t opaque_data);
 
+  // отправляет PING и ждёт ACK с тем же значением. Пир обрабатывает кадры по порядку, поэтому после возврата
+  // всё отправленное ранее гарантировано обработано пиром. WINDOW_UPDATE пропускается, на PING-запросы шлётся
+  // ответ,
+  // любой другой кадр (HEADERS, DATA и т.д.) означает неправильное использование функции и завершает тест
+  dd::task<void> sync(deadline_t deadline = deadline_after(5s),
+                      std::source_location = std::source_location::current());
+
   dd::task<void> receive_goaway(stream_id_t last_streamid, errc_e error_code, ping_e ping,
                                 deadline_t deadline = deadline_after(5s),
                                 std::source_location = std::source_location::current());
