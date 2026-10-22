@@ -34,5 +34,6 @@ add_http2_test(limits)
 add_http2_test(idle_timeout)
 add_http2_test(connects)
 add_http2_test(flow_control)
+add_http2_test(invalid_headers)
 
 file(COPY test_server.crt test_server.key DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
