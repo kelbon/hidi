@@ -389,7 +389,8 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
       // send headers
 
       if constexpr (IS_CLIENT) {
-        while (con->concurrent_streams_now() >= con->remote_settings.max_concurrent_streams) [[unlikely]] {
+        // node уже в responses (insert_response_node выше), то есть учтён в concurrent_streams_now()
+        while (con->concurrent_streams_now() > con->remote_settings.max_concurrent_streams) [[unlikely]] {
           HTTP2_LOG_TRACE(con->logctx, "too many streams, waiting (max is {})",
                           con->remote_settings.max_concurrent_streams);
           co_await yield_on_ioctx(con->ioctx);

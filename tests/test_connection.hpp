@@ -107,6 +107,8 @@ struct test_h2connection {
   uint32_t m_maxFrameSize = FRAME_LEN_MAX;
   // local SETTINGS_HEADER_TABLE_SIZE
   std::optional<uint32_t> m_headerTabSize;
+  // local SETTINGS_MAX_CONCURRENT_STREAMS
+  uint32_t m_maxConcurrentStreams = 0x7fffffff;
 
  public:
   bool is_client() const noexcept {
@@ -124,7 +126,8 @@ struct test_h2connection {
       : con(std::exchange(other.con, nullptr)),
         is_client_con(other.is_client_con),
         m_maxFrameSize(other.m_maxFrameSize),
-        m_headerTabSize(other.m_headerTabSize) {
+        m_headerTabSize(other.m_headerTabSize),
+        m_maxConcurrentStreams(other.m_maxConcurrentStreams) {
   }
   test_h2connection& operator=(test_h2connection&& other) noexcept {
     std::destroy_at(this);
@@ -239,6 +242,11 @@ struct test_h2connection {
                                          std::source_location = std::source_location::current());
 
   void close();
+
+  // makes sense only before sending SETTINGS frame, sets SETTINGS_MAX_CONCURRENT_STREAMS
+  void set_max_concurrent_streams(uint32_t count) noexcept {
+    m_maxConcurrentStreams = count;
+  }
 
   // makes sense only before sending SETTINGS frame, sets SETTINGS_MAX_FRAME_SIZE
   void set_max_frame_size(uint32_t size) noexcept {

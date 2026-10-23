@@ -139,7 +139,7 @@ dd::task<void> test_h2connection::send_settings() {
   FAKE_HTTP2_LOG(INFO, "");
 
   settings_t settings;
-  settings.max_concurrent_streams = 0x7fffffff;
+  settings.max_concurrent_streams = m_maxConcurrentStreams;
   settings.max_frame_size = m_maxFrameSize;
   settings.deprecated_priority_disabled = true;
   if (m_headerTabSize.has_value())
