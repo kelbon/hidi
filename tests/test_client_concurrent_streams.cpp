@@ -10,13 +10,7 @@ using namespace hidi;
 // Раньше отправляемый стрим учитывался в лимите ещё до отправки: при limit == 1 клиент не отправлял
 // ничего, а при limit == N одновременно было не более N - 1 стримов
 static dd::task<void> check_concurrency_limit(any_io_context_ref ioctx, h2client& client, uint32_t limit) {
-  any_acceptor acceptor = ioctx.create_acceptor(localhost(), /*reuse_address=*/false);
-  acceptor.listen();
-  client.try_connect(acceptor.get_local_endpoint(), deadline_after(5s)).start_and_detach();
-  io_error_code ec;
-  any_connection_t tcp = co_await acceptor.accept(ec);
-  REQUIRE(!ec);
-  test_h2connection server(new h2connection(std::move(tcp), *&ioctx), /*client=*/false);
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
   server.set_max_concurrent_streams(limit);
   co_await emulate_server_connection(server);
 
@@ -28,7 +22,8 @@ static dd::task<void> check_concurrency_limit(any_io_context_ref ioctx, h2client
     req.authority = client.get_remote().to_string();
     return req;
   };
-  using handle_t = decltype(client.send_request(make_request("/"), deadline_after(10s)).start_and_detach(true));
+  using handle_t =
+      decltype(client.send_request(make_request("/"), deadline_after(10s)).start_and_detach(true));
   std::vector<handle_t> handles;
   on_scope_exit {
     for (handle_t h : handles)
@@ -36,8 +31,8 @@ static dd::task<void> check_concurrency_limit(any_io_context_ref ioctx, h2client
   };
   // на один запрос больше чем разрешено
   for (uint32_t i = 0; i <= limit; ++i)
-    handles.push_back(
-        client.send_request(make_request("/" + std::to_string(i)), deadline_after(10s)).start_and_detach(true));
+    handles.push_back(client.send_request(make_request("/" + std::to_string(i)), deadline_after(10s))
+                          .start_and_detach(true));
 
   for (uint32_t i = 0; i < limit; ++i) {
     hdrs_and_data req = co_await server.receive_req();

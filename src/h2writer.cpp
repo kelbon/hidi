@@ -206,21 +206,29 @@ static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, writer_c
             e.what());
 }
 
+// блокирует запись. Разблокируется только после write_continuations
+// pre: HIDI_WAIT_WRITE уже сделано
+static void continuations_begin(h2connection& con) {
+  con.continuation_gateway.close();
+}
+// noexcept на случай если пойдёт что-то не так. Лучше сделать terminate сразу
+static void continuations_end(h2connection& con) noexcept {
+  dd::any_executor_ref exe{con.ioctx};
+  con.continuation_gateway.open(exe);
+}
+
 // writes CONTINUATION frames
 // assumes first 9 bytes of `hdrs` are reserved for frame header
+// pre: continuations_begin вызвано
+// Note: не забудь вызвать continuations_end
 static dd::task<void> write_continuations(h2connection_ptr con, stream_id_t streamid, size_t handled,
                                           bytes_t hdrs, io_error_code& ec) {
   assert(con);
   assert(handled < hdrs.size());
   assert(handled >= H2FHL);
+  assert(con->continuation_gateway.closed());
   byte_t* b = hdrs.data() + handled;
   byte_t* e = hdrs.data() + hdrs.size();
-  HIDI_WAIT_WRITE(*con);
-  con->continuation_gateway.close();
-  on_scope_exit {
-    dd::any_executor_ref exe{con->ioctx};
-    con->continuation_gateway.open(exe);
-  };
   size_t framesz;
   for (; b != e; b += framesz) {
     framesz = std::min<size_t>(con->remote_settings.max_frame_size, e - b);
@@ -261,6 +269,12 @@ static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, ht
     fhdr.flags = flags::END_STREAM;
   fhdr.form(bytes.data());
   HIDI_WAIT_WRITE(con);
+  if (!one_frame) [[unlikely]]
+    continuations_begin(con);
+  on_scope_exit {
+    if (!one_frame)
+      continuations_end(con);
+  };
   co_await con.write(std::span(bytes.data(), fhdr.length + H2FHL), ec);
   if (!one_frame) [[unlikely]]
     co_await write_continuations(&con, streamid, fhdr.length + H2FHL, std::move(bytes), ec);
@@ -427,9 +441,13 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
         trace_request_headers(*node, IS_CLIENT, con->logctx);
 #endif
       HIDI_WAIT_WRITE(*con);
+      if (!one_frame)
+        continuations_begin(*con);
       co_await con->write(std::span(headers.data(), fhdr.length + H2FHL), ec);
 
       if (ec || con->is_dropped()) {
+        if (!one_frame)
+          continuations_end(*con);
         // otherwise will be finished by drop_connection with
         // reqerr_e::cancelled
         if (ec != boost::asio::error::operation_aborted)
@@ -439,8 +457,11 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
       }
 
       if (!one_frame) [[unlikely]] {
+        on_scope_failure(unlockcon) {
+          continuations_end(*con);
+        };
         co_await write_continuations(con, node->streamid, fhdr.length + H2FHL, std::move(headers), ec);
-
+        unlockcon.use_and_forget();
         if (ec || con->is_dropped()) {
           if (ec != boost::asio::error::operation_aborted)
             con->finish_request(*node, reqerr_e::NETWORK_ERR);
