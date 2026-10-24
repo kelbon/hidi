@@ -243,6 +243,11 @@ void h2connection::settings_changed(h2frame newsettings, bool remote_is_client) 
     // только после подтверждения настроек я действительно могу перейти на свои настройки
     // ведь до этого клиент/сервер мог посылать запросы/ответы по старому размеру динамической таблицы
     decoder.dyntab.set_user_protocol_max_size(local_settings.header_table_size);
+    // RFC 7541 неоднозначен в том, обязан ли кодировщик пира сообщать об увеличении таблицы. nghttp2 считает,
+    // что не обязан, и сразу увеличивает таблицу декодера. Если таблица декодера больше таблицы кодировщика,
+    // индексы не расходятся, поэтому увеличивать безопасно
+    if (local_settings.header_table_size > decoder.dyntab.max_size())
+      decoder.dyntab.update_size(local_settings.header_table_size);
     return;
   }
   settings_t before = remote_settings;
