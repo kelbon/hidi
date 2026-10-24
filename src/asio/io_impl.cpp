@@ -246,7 +246,16 @@ void asio_tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t
 }
 
 size_t asio_tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
-  return do_try_write(*this, buf, ec);
+  (void)buf;
+  if (!writedata.allow_write) [[unlikely]] {
+    ec = boost::asio::error::operation_aborted;
+    return 0;
+  }
+  // Синхронный ssl::stream::write_some на неблокирующем сокете нельзя использовать: если сокет заполнится
+  // посреди записи зашифрованных данных, asio выбросит их остаток (ssl::detail::io, case want_output),
+  // а вызывающему сообщит, что открытый текст записан. Поток TLS будет испорчен.
+  // Поэтому для TLS запись всегда асинхронная
+  return 0;
 }
 
 void asio_tls_connection::start_write(writer_node* n) {
@@ -460,6 +469,14 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
   }
   if (!self.options.is_primal_connection)
     SSL_set_mode(res->sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
+  // SNI, по RFC 6066 только для доменного имени, не для IP адреса
+  if (const std::string* host = ep.remote.fqdn()) {
+    io_error_code ipec;
+    (void)asio::ip::make_address(*host, ipec);
+    if (ipec && !SSL_set_tlsext_host_name(res->sock.native_handle(), host->c_str()))
+      throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
+  }
   co_await net.handshake(res->sock, ssl::stream_base::handshake_type::client, ec);
   if (timeoutflag)
     throw timeout_exception();

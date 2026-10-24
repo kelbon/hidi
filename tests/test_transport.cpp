@@ -1,6 +1,5 @@
 
 #include "test_connection.hpp"
-#include "fuzzing/fuzzer.hpp"
 #include "hidi/asio/io_impl.hpp"
 
 #include <boost/asio/ssl.hpp>
@@ -18,7 +17,8 @@ static dd::task<void> write_until_error(any_connection_t& con, io_error_code& ec
 }
 
 // пир не читает, поэтому начатая запись никогда не завершится. shutdown не должен её ждать
-static dd::task<void> shutdown_with_blocked_write(any_io_context_ref ioctx) {
+TRANSPORT_TEST("shutdown does not wait for blocked write") {
+  any_io_context ioctx = make_asio_io_context(rawio);
   any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true);
   a.listen();
   any_connection_t peer = co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
@@ -29,7 +29,7 @@ static dd::task<void> shutdown_with_blocked_write(any_io_context_ref ioctx) {
   io_error_code write_ec;
   bool write_done = false;
   write_until_error(con, write_ec, write_done).start_and_detach();
-  co_await net.sleep(ioctx, std::chrono::milliseconds(100));
+  co_await net.sleep(rawio, std::chrono::milliseconds(100));
 
   co_await con->shutdown();
   // либо отменена зависшая запись, либо следующая запись после shutdown
@@ -38,35 +38,19 @@ static dd::task<void> shutdown_with_blocked_write(any_io_context_ref ioctx) {
   co_await peer->shutdown();
 }
 
-TEST("shutdown does not wait for blocked write") {
-  any_io_context ioctx = make_asio_io_context();
-  bool ended = false;
-  std::exception_ptr ex;
-  (void)run_test("shutdown does not wait for blocked write", shutdown_with_blocked_write(*&ioctx), ended, ex);
-  fuzzing::fuzzer fuz;
-  fuz.run_until(deadline_after(std::chrono::seconds(5)), ended, ioctx);
-  REQUIRE(ended);
-  if (ex)
-    std::rethrow_exception(ex);
-}
-
 // сервер принял TCP соединение, но не отвечает на TLS handshake. Клиент должен уважать deadline
-TEST("client TLS handshake respects deadline") {
-  boost::asio::io_context rawio;
-  boost::asio::ip::tcp::acceptor silent(rawio, internet_address(boost::asio::ip::address_v4::loopback(), 0));
+TRANSPORT_TEST("client TLS handshake respects deadline") {
+  any_io_context ioctx = make_asio_tls_io_context(rawio, make_ssl_context_for_client({}));
+  boost::asio::ip::tcp::acceptor silent(rawio, localhost());
   silent.listen();
-
-  h2client client(silent.local_endpoint(), h2client_options{},
-                  make_asio_tls_io_context(make_ssl_context_for_client({})));
-  bool ended = false;
-  std::exception_ptr ex;
-  auto connect = [](h2client& c) -> dd::task<void> {
-    (void)co_await c.try_connect(deadline_after(std::chrono::milliseconds(200)));
-  };
-  (void)run_test("client TLS handshake respects deadline", connect(client), ended, ex);
-  fuzzing::fuzzer fuz;
-  fuz.run_until(deadline_after(std::chrono::seconds(3)), ended, client.ioctx());
-  REQUIRE(ended);
+  bool timeout = false;
+  try {
+    (void)co_await ioctx.create_connection_client({silent.local_endpoint()},
+                                                  deadline_after(std::chrono::milliseconds(200)));
+  } catch (timeout_exception&) {
+    timeout = true;
+  }
+  REQUIRE(timeout);
 }
 
 static server_ssl_context_ptr test_ssl_ctx() {
@@ -134,6 +118,152 @@ SERVER_TEST("ALPN", test_ssl_ctx()) {
   }
   SECTION("no ALPN") {
     REQUIRE((co_await alpn_selected_by_server(server.ioctx(), addr, {})).empty());
+  }
+}
+
+static constexpr size_t BACKPRESSURE_CHUNK = 64 * 1024;
+static constexpr size_t BACKPRESSURE_CHUNKS = 16;
+// Буферы сокетов задаются явно и меньше одной TLS записи (16 KB), поэтому запись упирается в заполненные
+// буферы посреди записи независимо от настроек ОС по умолчанию (ОС может только округлить размер вверх до
+// своего минимума, у Linux это ~4.6 KB на отправку и ~2.3 KB на приём)
+static constexpr int SMALL_SOCKET_BUFFER = 2048;
+
+static byte_t pattern_byte(size_t i) {
+  return byte_t(i % 251);
+}
+
+static dd::task<void> write_pattern(any_connection_t& con, bool& done) {
+  std::vector<byte_t> chunk(BACKPRESSURE_CHUNK);
+  io_error_code ec;
+  for (size_t c = 0; c < BACKPRESSURE_CHUNKS; ++c) {
+    for (size_t i = 0; i < chunk.size(); ++i)
+      chunk[i] = pattern_byte(c * BACKPRESSURE_CHUNK + i);
+    co_await write_awaiter(con, ec, chunk);
+    REQUIRE(!ec);
+  }
+  done = true;
+}
+
+// принимает соединение (сервер нужен параллельно с подключением клиента, так как TLS handshake двусторонний)
+static dd::task<void> accept_raw(boost::asio::ip::tcp::acceptor& a, ssl_context_ptr sslctx,
+                                 any_connection_t& out, bool& done) {
+  boost::asio::ip::tcp::socket sock(a.get_executor());
+  io_error_code ec;
+  co_await net.accept(a, sock, ec);
+  REQUIRE(!ec);
+  if (sslctx)
+    out.reset(new asio_tls_connection(std::move(sock), std::move(sslctx)));
+  else
+    out.reset(new asio_connection(std::move(sock)));
+  co_await out->handshake(ec);
+  REQUIRE(!ec);
+  done = true;
+}
+
+// Пишущая сторона упирается в заполненные буферы сокетов. Ни один байт не должен потеряться
+TRANSPORT_TEST("write under backpressure") {
+  bool tls = false;
+  SECTION("TCP") {
+  }
+  SECTION("TLS") {
+    tls = true;
+  }
+  tcp_connection_options opts{.send_buffer_size = SMALL_SOCKET_BUFFER, .receive_buffer_size = SMALL_SOCKET_BUFFER};
+  any_io_context ioctx = tls ? make_asio_tls_io_context(rawio, make_ssl_context_for_client({}), opts)
+                             : make_asio_io_context(rawio, opts);
+  boost::asio::ip::tcp::acceptor a(rawio, localhost());
+  // принятые соединения наследуют размер буфера от слушающего сокета
+  a.set_option(boost::asio::socket_base::receive_buffer_size(SMALL_SOCKET_BUFFER));
+  a.listen();
+  any_connection_t reader;
+  bool accepted = false;
+  accept_raw(a, tls ? test_ssl_ctx().p : nullptr, reader, accepted).start_and_detach();
+  any_connection_t writer = co_await ioctx.create_connection_client({a.local_endpoint()}, deadline_after(5s));
+  while (!accepted)
+    co_await net.sleep(rawio, std::chrono::milliseconds(1));
+
+  bool written = false;
+  write_pattern(writer, written).start_and_detach();
+  co_await net.sleep(rawio, std::chrono::milliseconds(50));
+
+  std::vector<byte_t> chunk(BACKPRESSURE_CHUNK);
+  io_error_code ec;
+  for (size_t c = 0; c < BACKPRESSURE_CHUNKS; ++c) {
+    co_await read_awaiter(reader, ec, chunk);
+    REQUIRE(!ec);
+    for (size_t i = 0; i < chunk.size(); ++i)
+      REQUIRE(chunk[i] == pattern_byte(c * BACKPRESSURE_CHUNK + i));
+  }
+  REQUIRE(written);
+  co_await writer->shutdown();
+  co_await reader->shutdown();
+}
+
+static dd::task<void> accept_and_get_sni(boost::asio::ip::tcp::acceptor& a, boost::asio::ssl::context& sslctx,
+                                         std::string& sni, bool& done) {
+  boost::asio::ssl::stream<boost::asio::ip::tcp::socket> sock(a.get_executor(), sslctx);
+  io_error_code ec;
+  co_await net.accept(a, sock.lowest_layer(), ec);
+  REQUIRE(!ec);
+  co_await net.handshake(sock, boost::asio::ssl::stream_base::server, ec);
+  REQUIRE(!ec);
+  const char* name = SSL_get_servername(sock.native_handle(), TLSEXT_NAMETYPE_host_name);
+  sni = name ? name : "";
+  done = true;
+}
+
+// клиент передаёт SNI, если подключается по доменному имени
+// https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
+TRANSPORT_TEST("client sends SNI") {
+  any_io_context ioctx = make_asio_tls_io_context(rawio, make_ssl_context_for_client({}));
+  boost::asio::ip::tcp::acceptor a(rawio, localhost());
+  a.listen();
+  endpoint target;
+  std::string expected;
+  SECTION("domain name") {
+    target = endpoint(std::string("localhost"), a.local_endpoint().port());
+    expected = "localhost";
+  }
+  SECTION("ip address") {
+    target = endpoint(a.local_endpoint());
+    expected = "";
+  }
+  ssl_context_ptr server_sslctx = test_ssl_ctx().p;
+  std::string sni = "not set";
+  bool done = false;
+  accept_and_get_sni(a, server_sslctx->ctx, sni, done).start_and_detach();
+  any_connection_t con = co_await ioctx.create_connection_client({target}, deadline_after(5s));
+  while (!done)
+    co_await net.sleep(rawio, std::chrono::milliseconds(1));
+  REQUIRE(sni == expected);
+  co_await con->shutdown();
+}
+
+// перевзвод таймера отменяет старое ожидание, но его завершение не должно влиять на новый взвод
+TEST("timer re-arm ignores canceled wait") {
+  boost::asio::io_context io;
+  asio_timer timer(io);
+  int fired = 0;
+  int canceled = 0;
+  timer.set_callback([&](bool c) { ++(c ? canceled : fired); });
+
+  SECTION("re-arm") {
+    timer.arm(deadline_after(std::chrono::hours(1)));
+    timer.arm(deadline_after(std::chrono::milliseconds(1)));
+    io.poll();  // завершение отменённого ожидания
+    REQUIRE(timer.is_armed());
+    REQUIRE(canceled == 0);
+    io.run();
+    REQUIRE(fired == 1);
+    REQUIRE(!timer.is_armed());
+  }
+  SECTION("cancel") {
+    // на этом держится net.sleep: отменённое ожидание сообщает об отмене
+    timer.arm(deadline_after(std::chrono::hours(1)));
+    REQUIRE(timer.cancel());
+    io.run();
+    REQUIRE(canceled == 1);
+    REQUIRE(fired == 0);
   }
 }
 
