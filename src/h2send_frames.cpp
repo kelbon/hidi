@@ -17,6 +17,10 @@ dd::task<bool> send_goaway(h2connection_ptr con, stream_id_t laststreamid, errc_
       co_return true;
     con->graceful_shutdown_goaway_sended = true;
   }
+  // следим что фрейм не больше допустимого
+  constexpr size_t MAX_GOAWAY_DEBUG_LEN = MIN_MAX_FRAME_LEN - 8;
+  if (dbginfo.size() > MAX_GOAWAY_DEBUG_LEN)
+    dbginfo.resize(MAX_GOAWAY_DEBUG_LEN);
   bytes_t bytes;
   goaway_frame::form(laststreamid, errc, std::move(dbginfo), std::back_inserter(bytes));
   HIDI_WAIT_WRITE(*con);

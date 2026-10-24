@@ -49,9 +49,8 @@ static void server_handle_utility_frame(h2frame frame, h2server_session& session
       return;
     case PUSH_PROMISE:
       // https://datatracker.ietf.org/doc/html/rfc9113#section-6.6-9
-      assert(!con.local_settings.enable_push);  // always setted to 0
-      throw protocol_error(errc_e::PROTOCOL_ERROR,
-                           "PUSH_PROMISE must not be sent, SETTINGS_ENABLE_PUSH is 0");
+      // push инициирует только сервер, клиент не может присылать PUSH_PROMISE
+      throw protocol_error(errc_e::PROTOCOL_ERROR, "PUSH_PROMISE must not be sent by client");
     case CONTINUATION:
       // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.10-8
       throw protocol_error(

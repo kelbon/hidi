@@ -253,7 +253,7 @@ struct settings_t {
   static constexpr inline uint32_t MAX_MAX_CONCURRENT_STREAMS = ((uint32_t(1) << 31) - 1);
 
   uint32_t header_table_size = 4096;
-  bool enable_push = false;
+  bool enable_push = true;
   uint32_t max_concurrent_streams = MAX_MAX_CONCURRENT_STREAMS;
   // only for stream-level size!
   uint32_t initial_stream_window_size = 65'535;
@@ -322,9 +322,13 @@ inline void validate_settings_ack_frame(const frame_header& h) {
 }
 
 inline void validate_settings_not_ack_frame(const frame_header& h) {
-  if (h.type != frame_e::SETTINGS || (h.flags & flags::ACK) || h.streamid != 0 ||
-      (h.length % sizeof(setting_t)) != 0) {
+  if (h.type != frame_e::SETTINGS || (h.flags & flags::ACK) || h.streamid != 0) {
     throw protocol_error(errc_e::PROTOCOL_ERROR, std::format("invalid frame {}", h));
+  }
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5-9
+  if ((h.length % sizeof(setting_t)) != 0) {
+    throw protocol_error(errc_e::FRAME_SIZE_ERROR,
+                         std::format("SETTINGS frame len is not a multiple of 6, len: {}", h.length));
   }
 }
 
