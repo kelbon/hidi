@@ -215,6 +215,11 @@ dd::task<void> do_shutdown(noexport::single_writer_guarantee& wd, auto& sock) {
   }
   // запрещает новые try_write/start_write
   wd.allow_write = false;
+  // если пир не читает, начатый async_write не завершится никогда, поэтому он отменяется.
+  // writer получит operation_aborted и сбросит остаток очереди
+  io_error_code ec;
+  ec = sock.cancel(ec);
+  (void)ec;
   // либо writer сейчас работает, либо уже done
   // (т.к. любой write бы его разбудил и он бы никогда не заснул пока не обработает всё)
   while (!wd.writer_done())

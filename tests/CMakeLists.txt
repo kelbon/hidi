@@ -39,5 +39,6 @@ add_http2_test(client_graceful_goaway)
 add_http2_test(client_concurrent_streams)
 add_http2_test(continuation_atomicity)
 add_http2_test(frame_validation)
+add_http2_test(transport)
 
 file(COPY test_server.crt test_server.key DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
