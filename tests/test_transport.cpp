@@ -66,5 +66,36 @@ TEST("client TLS handshake respects deadline") {
   REQUIRE(ended);
 }
 
+static server_ssl_context_ptr test_ssl_ctx() {
+  return make_ssl_context_for_server(HTTP2_TLS_DIR "/test_server.crt", HTTP2_TLS_DIR "/test_server.key");
+}
+
+// клиент открыл TCP соединение и молчит. Это не должно мешать серверу принимать других клиентов
+SERVER_TEST("silent TCP connection does not block accept", test_ssl_ctx()) {
+  boost::asio::io_context rawio;
+  boost::asio::ip::tcp::socket silent(rawio);
+  // соединение попадает в очередь listen, даже пока сервер не вызвал accept
+  silent.connect(addr);
+
+  auto client = co_await fake_client_connection(ioctx, addr, deadline_after(std::chrono::seconds(2)));
+  co_await emulate_client_connection(client);
+}
+
+// молчащее соединение закрывается по connection_timeout, в том числе посреди TLS handshake
+SERVER_TEST("silent TCP connection is dropped by connection timeout", test_ssl_ctx()) {
+  server.get_options().connection_timeout = std::chrono::milliseconds(100);
+  boost::asio::io_context rawio;
+  boost::asio::ip::tcp::socket silent(rawio);
+  silent.connect(addr);
+
+  deadline_t deadline = deadline_after(std::chrono::seconds(2));
+  while (server.sessions_count() == 0 && !deadline.is_reached())
+    co_await net.sleep(ioctx, std::chrono::milliseconds(10));
+  REQUIRE(server.sessions_count() == 1);
+  while (server.sessions_count() != 0 && !deadline.is_reached())
+    co_await net.sleep(ioctx, std::chrono::milliseconds(10));
+  REQUIRE(server.sessions_count() == 0);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

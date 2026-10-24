@@ -37,6 +37,13 @@ struct connection_i {
   // pre: try_write returns < sent_data.size()
   virtual void start_write(writer_node*) = 0;
   virtual dd::task<void> shutdown() = 0;
+  // Завершает установку соединения, принятого через acceptor (например TLS handshake)
+  // Вызывается сервером ровно один раз перед любым чтением/записью. Acceptor не делает этого сам, чтобы
+  // медленный клиент не останавливал приём остальных соединений и чтобы handshake шёл под таймаутом сессии
+  // Note: соединения из create_connection_client возвращаются уже готовыми
+  virtual dd::task<void> handshake(io_error_code&) {
+    co_return;
+  }
 
   virtual bool is_https() = 0;
 

@@ -255,6 +255,10 @@ dd::task<void> asio_tls_connection::shutdown() noexcept {
   return do_shutdown(writedata, sock.lowest_layer());
 }
 
+dd::task<void> asio_tls_connection::handshake(io_error_code& ec) {
+  co_await net.handshake(sock, asio::ssl::stream_base::server, ec);
+}
+
 asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
   sock.non_blocking(true);
   (void)start_inner_writer_for(this);
@@ -496,11 +500,8 @@ struct asio_tls_acceptor {
     co_await net.accept(a, socket, ec);
     if (ec)
       co_return nullptr;
-    std::unique_ptr<asio_tls_connection> tcpcon(new asio_tls_connection(std::move(socket), sslctx));
-    co_await net.handshake(tcpcon->sock, asio::ssl::stream_base::server, ec);
-    if (ec)
-      co_return nullptr;
-    co_return any_connection_t(std::move(tcpcon));
+    // TLS handshake делает сервер через connection_i::handshake
+    co_return any_connection_t(new asio_tls_connection(std::move(socket), sslctx));
   }
 
   void close() {
