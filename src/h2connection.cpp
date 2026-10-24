@@ -243,6 +243,11 @@ void h2connection::settings_changed(h2frame newsettings, bool remote_is_client) 
     // только после подтверждения настроек я действительно могу перейти на свои настройки
     // ведь до этого клиент/сервер мог посылать запросы/ответы по старому размеру динамической таблицы
     decoder.dyntab.set_user_protocol_max_size(local_settings.header_table_size);
+    // RFC 7541 неоднозначен в том, обязан ли кодировщик пира сообщать об увеличении таблицы. nghttp2 считает,
+    // что не обязан, и сразу увеличивает таблицу декодера. Если таблица декодера больше таблицы кодировщика,
+    // индексы не расходятся, поэтому увеличивать безопасно
+    if (local_settings.header_table_size > decoder.dyntab.max_size())
+      decoder.dyntab.update_size(local_settings.header_table_size);
     return;
   }
   settings_t before = remote_settings;
@@ -274,11 +279,13 @@ void h2connection::server_settings_changed(h2frame newsettings) {
 
 void h2connection::server_requests_graceful_shutdown(goaway_frame f) {
   HTTP2_LOG_TRACE(logctx, "graceful shutdown initiated: last stream id: {}", f.last_streamid);
-  // if we did not initiate this graceful shutdown
-  if (!graceful_shutdown_goaway_sended) {
-    initiate_graceful_shutdown(f.last_streamid);
-    graceful_shutdown_goaway_sended = true;
-  }
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8-14
+  // Сервер может прислать несколько GOAWAY подряд: сначала с last_stream_id == MAX_STREAM_ID как
+  // предупреждение, затем с реальным значением. Каждый обрабатывается, потому что стримы, которые сервер не
+  // обработает (id > last_stream_id), нужно завершить сразу, чтобы запрос можно было повторить
+  // Также это нужно когда graceful shutdown начал сам клиент (graceful_stop)
+  initiate_graceful_shutdown(f.last_streamid);
+  graceful_shutdown_goaway_sended = true;
   // do not drop connection, graceful_stop will do it or reader (its out of streams)
 }
 

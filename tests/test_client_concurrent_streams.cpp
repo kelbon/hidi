@@ -5,10 +5,9 @@
 
 using namespace hidi;
 
-// Сервер ограничивает число одновременных стримов значением `limit`. Клиент должен сразу отправить `limit`
-// запросов, а запрос сверх лимита отправить только когда освободится слот.
-// Раньше отправляемый стрим учитывался в лимите ещё до отправки: при limit == 1 клиент не отправлял
-// ничего, а при limit == N одновременно было не более N - 1 стримов
+// Сервер ограничивает число одновременных стримов значением `limit`
+// Клиент должен сразу отправить `limit` запросов, а запрос сверх лимита отправить только когда освободится
+// слот
 static dd::task<void> check_concurrency_limit(any_io_context_ref ioctx, h2client& client, uint32_t limit) {
   auto server = co_await fake_server_session(ioctx, {localhost()}, client);
   server.set_max_concurrent_streams(limit);

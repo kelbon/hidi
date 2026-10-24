@@ -170,6 +170,7 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
     self->m_connection->writer.handle = nullptr;
     assert(self->m_options.max_continuation_len_bytes <= MAX_CONTINUATION_LEN);
     self->m_connection->max_continuation_len = self->m_options.max_continuation_len_bytes;
+    self->m_connection->max_pending_reply_frames = self->m_options.max_pending_reply_frames;
 
     start_reader_for(self, new_connection);
     // writer itself sets writer handle in connection
@@ -345,6 +346,7 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
         }
         // do not require connection close
       }
+      con.validate_pending_reply_frames();
 
       // connection control flow (streamlevel in handle_frame)
       if (con.my_window_size < MAX_WINDOW_SIZE / 2)
@@ -379,15 +381,10 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
   goto drop_my_connection;
 protocol_error:
   reason = reqerr_e::PROTOCOL_ERR;
-  // To avoid ambiguity just send max_stream_id every time. Server did not
-  // initiate streams (SERVER_PUSH disabled) and nghttp2 for example answers
-  // with protocol error for some values
-  //
-  // Rfc:
-  // If a connection terminates without a GOAWAY frame,
-  // the last stream identifier is effectively the highest possible stream
-  // identifier
-  send_goaway(&con, MAX_STREAM_ID, goaway_info.errc, std::move(goaway_info.dbginfo)).start_and_detach();
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8-7
+  // last_stream_id относится к стримам, начатым получателем GOAWAY. Сервер стримы не начинает (push
+  // отключён), поэтому всегда 0
+  send_goaway(&con, 0, goaway_info.errc, std::move(goaway_info.dbginfo)).start_and_detach();
   goto drop_my_connection;
 network_error:
   reason = ec == boost::asio::error::operation_aborted ? reqerr_e::CANCELLED : reqerr_e::NETWORK_ERR;

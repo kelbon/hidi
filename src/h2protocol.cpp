@@ -284,6 +284,8 @@ goaway_frame goaway_frame::parse(frame_header header, std::span<const byte_t> by
   memcpy(&frame.error_code, bytes.data() + 4, 4);
   htonli(frame.last_streamid);
   htonli(frame.error_code);
+  // игнорирование зарезервированного бита
+  frame.last_streamid &= stream_id_t(0x7FFFFFFF);
   frame.debug_info =
       std::string_view((const char*)bytes.data() + 8, (const char*)bytes.data() + bytes.size());
   return frame;
@@ -296,6 +298,8 @@ window_update_frame window_update_frame::parse(frame_header header, std::span<co
   window_update_frame frame{.header = header};
   std::memcpy(&frame.window_size_increment, bytes.data(), 4);
   htonli(frame.window_size_increment);
+  // игнорирование зарезервированного бита
+  frame.window_size_increment &= uint32_t(0x7FFFFFFF);
   validate_window_update_increment(header, frame.window_size_increment);
   return frame;
 }

@@ -11,6 +11,9 @@ struct asio_timer::impl {
   std::optional<duration> period;
   timer_callback_t fn;
   bool armed = false;
+  // увеличивается при каждом arm. Отменённое ожидание завершается позже (operation_aborted), и если таймер
+  // уже перевзведён, это завершение относится к старому взводу и должно игнорироваться
+  uint64_t generation = 0;
 
   explicit impl(boost::asio::io_context& ctx) : timer(ctx) {
   }
@@ -25,10 +28,11 @@ void asio_timer::arm(duration d) {
 
 struct callback_t {
   std::weak_ptr<asio_timer::impl> w;
+  uint64_t generation = 0;
 
   void operator()(const io_error_code& ec) {
     auto x = w.lock();
-    if (!x)
+    if (!x || x->generation != generation)
       return;
     if (ec) {
       if (x->fn)
@@ -43,7 +47,7 @@ struct callback_t {
       return;
     }
     x->timer.expires_after(*x->period);
-    x->timer.async_wait(callback_t(std::move(w)));
+    x->timer.async_wait(callback_t(std::move(w), generation));
   }
 };
 
@@ -51,7 +55,8 @@ void asio_timer::arm(time_point tp) {
   cancel();
   m_impl->timer.expires_at(tp);
   m_impl->armed = true;
-  m_impl->timer.async_wait(callback_t(m_impl));
+  ++m_impl->generation;
+  m_impl->timer.async_wait(callback_t(m_impl, m_impl->generation));
 }
 
 void asio_timer::arm_periodic(duration d) {

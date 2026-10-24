@@ -195,6 +195,12 @@ struct h2server::impl {
         session_ptr->connection->shutdown(reqerr_e::TIMEOUT);
       });
       timer.arm(options.connection_timeout);
+      {
+        io_error_code ec;
+        co_await session.connection->tcpcon->handshake(ec);
+        if (ec)
+          throw network_exception(ec);
+      }
       (void)co_await establish_http2_session_server(session.connection, options);
       session.established = true;
       timer.cancel();

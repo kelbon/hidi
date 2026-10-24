@@ -84,5 +84,52 @@ CLIENT_TEST("client does not open new streams after graceful GOAWAY") {
   REQUIRE(handle_b.promise().result_or_rethrow().status == 200);
 }
 
+CLIENT_TEST("second GOAWAY cancels streams above last_streamid") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  auto make_request = [&](std::string path) {
+    http_request req;
+    req.method = http_method_e::GET;
+    req.path = std::move(path);
+    req.scheme = scheme_e::HTTP;
+    req.authority = client.get_remote().to_string();
+    return req;
+  };
+  auto handle_a =
+      client.send_request(make_request("/a"), deadline_after(20s)).start_and_detach(/*stop_at_end=*/true);
+  auto handle_b =
+      client.send_request(make_request("/b"), deadline_after(20s)).start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    handle_a.destroy();
+    handle_b.destroy();
+  };
+  REQUIRE((co_await server.receive_req()).streamid == 1);
+  REQUIRE((co_await server.receive_req()).streamid == 3);
+
+  co_await server.send_goaway(MAX_STREAM_ID, errc_e::NO_ERROR);
+  SECTION("regular") {
+    co_await server.send_goaway(/*last_streamid=*/1, errc_e::NO_ERROR);
+  }
+  SECTION("reserved bit in last_streamid is ignored") {
+    std::vector<byte_t> bytes;
+    goaway_frame::form(/*last_streamid=*/1, errc_e::NO_ERROR, "", std::back_inserter(bytes));
+    bytes[FRAME_HEADER_LEN] |= 0x80;
+    co_await server.send_raw_frame(std::move(bytes));
+  }
+  co_await server.sync();
+
+  REQUIRE(!handle_a.done());
+  REQUIRE(handle_b.done());
+  // отменённый запрос завершается исключением
+  bool canceled = false;
+  try {
+    (void)handle_b.promise().result_or_rethrow();
+  } catch (...) {
+    canceled = true;
+  }
+  REQUIRE(canceled);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

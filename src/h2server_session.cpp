@@ -71,6 +71,7 @@ h2server_session::h2server_session(h2connection_ptr con, h2server_options opts, 
   options.max_receive_frame_size = std::min(FRAME_LEN_MAX, options.max_receive_frame_size);
   options.max_continuation_len_bytes = std::min(options.max_continuation_len_bytes, MAX_CONTINUATION_LEN);
   connection->max_continuation_len = options.max_continuation_len_bytes;
+  connection->max_pending_reply_frames = options.max_pending_reply_frames;
 }
 
 h2server_session::~h2server_session() {
@@ -307,6 +308,7 @@ void h2server_session::start_request_assemble(const h2frame& frame, h2stream* ex
   } else if (requests_left_approx() >= connection->local_settings.max_concurrent_streams) {
     size_t exactreq = requests_left_exactly();
     if (exactreq >= connection->local_settings.max_concurrent_streams) {
+      connection->ignore_frame(frame);
       throw stream_error(errc_e::REFUSED_STREAM, frame.header.streamid,
                          std::format("refused due max concurrent streams exceeded, max count: {}, actual: {}",
                                      connection->local_settings.max_concurrent_streams, exactreq));
