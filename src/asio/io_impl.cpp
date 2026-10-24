@@ -438,6 +438,13 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
   if (!self.client_sslctx)
     self.client_sslctx = make_ssl_context_for_client(self.options.additional_ssl_certificates).p;
   std::unique_ptr<asio_tls_connection> res(new asio_tls_connection(std::move(tcp_sock), self.client_sslctx));
+  // tcp_sock перемещён, теперь по таймауту нужно закрывать сокет внутри res
+  timer.set_callback([&](bool canceled) {
+    if (!canceled) {
+      timeoutflag = true;
+      close_tcp_sock(res->sock.lowest_layer());
+    }
+  });
   if (self.options.host_for_name_verification) {
     res->sock.set_verify_mode(ssl::verify_peer);
     res->sock.set_verify_callback(

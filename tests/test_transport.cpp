@@ -47,5 +47,24 @@ TEST("shutdown does not wait for blocked write") {
     std::rethrow_exception(ex);
 }
 
+// сервер принял TCP соединение, но не отвечает на TLS handshake. Клиент должен уважать deadline
+TEST("client TLS handshake respects deadline") {
+  boost::asio::io_context rawio;
+  boost::asio::ip::tcp::acceptor silent(rawio, internet_address(boost::asio::ip::address_v4::loopback(), 0));
+  silent.listen();
+
+  h2client client(silent.local_endpoint(), h2client_options{},
+                  make_asio_tls_io_context(make_ssl_context_for_client({})));
+  bool ended = false;
+  std::exception_ptr ex;
+  auto connect = [](h2client& c) -> dd::task<void> {
+    (void)co_await c.try_connect(deadline_after(std::chrono::milliseconds(200)));
+  };
+  (void)run_test("client TLS handshake respects deadline", connect(client), ended, ex);
+  fuzzing::fuzzer fuz;
+  fuz.run_until(deadline_after(std::chrono::seconds(3)), ended, client.ioctx());
+  REQUIRE(ended);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;
