@@ -1,6 +1,9 @@
 
 #include "test_connection.hpp"
 #include "fuzzing/fuzzer.hpp"
+#include "hidi/asio/io_impl.hpp"
+
+#include <boost/asio/ssl.hpp>
 
 #include <moko3/moko3.hpp>
 
@@ -95,6 +98,43 @@ SERVER_TEST("silent TCP connection is dropped by connection timeout", test_ssl_c
   while (server.sessions_count() != 0 && !deadline.is_reached())
     co_await net.sleep(ioctx, std::chrono::milliseconds(10));
   REQUIRE(server.sessions_count() == 0);
+}
+
+// подключается к серверу как TLS клиент, предлагающий в ALPN `offer`, и возвращает выбранный сервером протокол
+static dd::task<std::string> alpn_selected_by_server(any_io_context& io, internet_address addr,
+                                                     std::vector<unsigned char> offer) {
+  namespace ssl = boost::asio::ssl;
+  ssl::context sslctx(ssl::context::tls_client);
+  sslctx.set_verify_mode(ssl::verify_none);
+  if (!offer.empty())
+    REQUIRE(0 == SSL_CTX_set_alpn_protos(sslctx.native_handle(), offer.data(), offer.size()));
+  ssl::stream<boost::asio::ip::tcp::socket> sock(aa::any_cast<asio_tls_io&>(io).ioctx, sslctx);
+  // соединение попадает в очередь listen, даже пока сервер не вызвал accept
+  sock.lowest_layer().connect(addr);
+  io_error_code ec;
+  co_await net.handshake(sock, ssl::stream_base::client, ec);
+  REQUIRE(!ec);
+  const unsigned char* selected = nullptr;
+  unsigned int len = 0;
+  SSL_get0_alpn_selected(sock.native_handle(), &selected, &len);
+  co_return std::string((const char*)selected, len);
+}
+
+// сервер выбирает h2, если клиент его предлагает, и не отклоняет клиентов без h2
+SERVER_TEST("ALPN", test_ssl_ctx()) {
+  if (!is_tls_server)
+    co_return;
+  SECTION("h2 offered") {
+    std::vector<unsigned char> offer{8, 'h', 't', 't', 'p', '/', '1', '.', '1', 2, 'h', '2'};
+    REQUIRE((co_await alpn_selected_by_server(server.ioctx(), addr, offer)) == "h2");
+  }
+  SECTION("h2 not offered") {
+    std::vector<unsigned char> offer{8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+    REQUIRE((co_await alpn_selected_by_server(server.ioctx(), addr, offer)).empty());
+  }
+  SECTION("no ALPN") {
+    REQUIRE((co_await alpn_selected_by_server(server.ioctx(), addr, {})).empty());
+  }
 }
 
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
