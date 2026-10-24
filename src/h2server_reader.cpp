@@ -156,7 +156,10 @@ dd::task<int> start_server_reader_for(h2server_session& session) try {
   co_return reqerr_e::PROTOCOL_ERR;
 } catch (protocol_error& e) {
   HTTP2_LOG(session.logctx(), ERROR, "exception in reader. err: {}", e.what());
-  send_goaway(session.connection, MAX_STREAM_ID, e.errc, e.what()).start_and_detach();
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-5.4.1-3
+  // последний стрим клиента, который сервер начал обрабатывать, остальные клиент может безопасно повторить
+  send_goaway(session.connection, session.connection->last_initiated_streamid(), e.errc, e.what())
+      .start_and_detach();
   co_return reqerr_e::PROTOCOL_ERR;
 } catch (goaway_exception& gae) {
   HTTP2_LOG(session.logctx(), ERROR, "goaway received, {}", gae.what());

@@ -154,7 +154,8 @@ SERVER_TEST("server CONTINUATION limit", test_ssl_ctx()) {
   SECTION("overlimit") {
     headers.resize(LIMIT, 'a');
     co_await client.send_raw_continuation(1, headers, /*end_headers=*/true);
-    co_await client.receive_goaway(MAX_STREAM_ID, errc_e::ENHANCE_YOUR_CALM, ping_e::RESPONSE);
+    // блок заголовков стрима 1 отброшен, стрим не начат
+    co_await client.receive_goaway(0, errc_e::ENHANCE_YOUR_CALM, ping_e::RESPONSE);
   }
   SECTION("headers.size() == LIMIT") {
     headers.resize(LIMIT - FIRST_CHUNK, 'a');

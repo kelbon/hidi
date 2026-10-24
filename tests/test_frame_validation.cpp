@@ -18,16 +18,39 @@ SERVER_TEST("WINDOW_UPDATE reserved bit is ignored") {
   co_await client.sync();
 }
 
-SERVER_TEST("SETTINGS with len not multiple of 6") {
-  auto client = co_await fake_client_connection(ioctx, addr);
-  co_await emulate_client_connection(client);
-
+static std::vector<byte_t> settings_with_len_5() {
   std::vector<byte_t> bytes;
   frame_header{.length = 5, .type = frame_e::SETTINGS, .flags = 0, .streamid = 0}.form(
       std::back_inserter(bytes));
   bytes.resize(bytes.size() + 5);
-  co_await client.send_raw_frame(std::move(bytes));
-  co_await client.receive_goaway(MAX_STREAM_ID, errc_e::FRAME_SIZE_ERROR, ping_e::RESPONSE);
+  return bytes;
+}
+
+SERVER_TEST("SETTINGS with len not multiple of 6") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+
+  // last_stream_id в GOAWAY - последний стрим, который сервер начал обрабатывать
+  stream_id_t last_streamid = 0;
+  SECTION("no streams") {
+  }
+  SECTION("after request") {
+    std::vector<header> hdrs{
+        {":method", "GET"}, {":path", "/"}, {":scheme", "http"}, {":authority", addr.address().to_string()}};
+    co_await client.send_req(1, hdrs);
+    REQUIRE((co_await client.receive_rsp()).streamid == 1);
+    last_streamid = 1;
+  }
+  co_await client.send_raw_frame(settings_with_len_5());
+  co_await client.receive_goaway(last_streamid, errc_e::FRAME_SIZE_ERROR, ping_e::RESPONSE);
+}
+
+// сервер стримы не начинает, поэтому клиент всегда отправляет last_stream_id == 0
+CLIENT_TEST("client GOAWAY on protocol error has last_streamid 0") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  co_await server.send_raw_frame(settings_with_len_5());
+  co_await server.receive_goaway(0, errc_e::FRAME_SIZE_ERROR, ping_e::RESPONSE);
 }
 
 // Клиент не поддерживает push и обязан явно отправить 0
