@@ -344,8 +344,8 @@ dd::task<void> test_h2connection::send_rsp(stream_id_t streamid, std::vector<hea
   FAKE_HTTP2_LOG(INFO, "");
   h2test_frame hdrs;
 
-  for (auto&& [name, value, _] : headers)
-    con->encoder.encode(name, value, std::back_inserter(hdrs.data));
+  auto hdrs_bytes = encode_headers(headers);
+  hdrs.data.assign(hdrs_bytes.begin(), hdrs_bytes.end());
   // hope hdrs size < max frame size in tests
   hdrs.hdr.length = uint32_t(hdrs.data.size());
   hdrs.hdr.flags = flags::END_HEADERS;

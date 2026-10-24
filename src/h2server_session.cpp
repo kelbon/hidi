@@ -307,6 +307,7 @@ void h2server_session::start_request_assemble(const h2frame& frame, h2stream* ex
   } else if (requests_left_approx() >= connection->local_settings.max_concurrent_streams) {
     size_t exactreq = requests_left_exactly();
     if (exactreq >= connection->local_settings.max_concurrent_streams) {
+      connection->ignore_frame(frame);
       throw stream_error(errc_e::REFUSED_STREAM, frame.header.streamid,
                          std::format("refused due max concurrent streams exceeded, max count: {}, actual: {}",
                                      connection->local_settings.max_concurrent_streams, exactreq));

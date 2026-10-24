@@ -164,6 +164,31 @@ SERVER_TEST("server CONTINUATION limit", test_ssl_ctx()) {
   }
 }
 
+// отказ по max_concurrent_streams не должен ломать таблицу декодера сервера
+SERVER_TEST("refused stream keeps hpack state") {
+  server.get_options().max_concurrent_streams = 1;
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  std::vector<header> hdrs{
+      {":method", "GET"}, {":path", "/"}, {":scheme", "http"}, {":authority", addr.address().to_string()},
+      {"x-cached", "1"},
+  };
+  // стрим 1 занимает единственный слот
+  co_await client.send_headers(1, hdrs, /*end_stream=*/false);
+  // стрим 3 отклоняется, но его блок добавляет "x-cached: 3" в таблицу
+  hdrs.back().value = "3";
+  co_await client.send_headers(3, hdrs, /*end_stream=*/true);
+  co_await client.receive_rst_stream(3, errc_e::REFUSED_STREAM);
+
+  co_await client.send_data(1, "x", /*end_stream=*/true);
+  REQUIRE((co_await client.receive_rsp()).streamid == 1);
+  // стрим 5 ссылается на запись из блока стрима 3
+  co_await client.send_headers(5, hdrs, /*end_stream=*/true);
+  auto rsp = co_await client.receive_rsp();
+  REQUIRE(rsp.streamid == 5);
+  REQUIRE(std::ranges::find(rsp.headers, header{"x-cached", "3"}) != rsp.headers.end());
+}
+
 SERVER_TEST("big requests") {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);

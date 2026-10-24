@@ -249,6 +249,7 @@ enum settings_identifier_e : uint16_t {
   SETTINGS_NO_RFC7540_PRIORITIES = 0x9,
 };
 
+// дефолтные значения здесь все из RFC. Клиент всегда отправляет enable push = false
 struct settings_t {
   static constexpr inline uint32_t MAX_MAX_CONCURRENT_STREAMS = ((uint32_t(1) << 31) - 1);
 
