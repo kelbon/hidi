@@ -33,6 +33,14 @@ struct single_writer_guarantee {
   bool allow_write = true;
   ZAL_PIN;
 
+  single_writer_guarantee() = default;
+  // соединение может быть уничтожено без shutdown (например не удался TLS handshake), writer в этот момент
+  // ждёт работы и должен быть уничтожен
+  ~single_writer_guarantee() {
+    if (writer)
+      writer.destroy();
+  }
+
   [[nodiscard]] bool writer_done() const noexcept {
     // writer ожидает новой работы, но её никогда не будет
     return !allow_write && writersqueue.empty() && writer != nullptr;

@@ -135,7 +135,7 @@ static dd::job start_inner_writer_for(auto* self) {
 [[nodiscard]] static bool do_try_read(noexport::single_read_assumption& rd, std::span<byte_t> buf) noexcept {
   size_t avail = rd.readen_end - rd.readen_start;
   bool b = avail >= buf.size();
-  if (b) {
+  if (b && !buf.empty()) {
     memcpy(buf.data(), rd.readen_start, buf.size());
     rd.readen_start += buf.size();
   }
@@ -153,7 +153,9 @@ static dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& e
     if (ec) [[unlikely]]
       break;
   }
-  c.readdata.readen_end += readen - userbufsz;
+  // при ошибке может быть прочитано меньше userbufsz, тогда в readdata ничего не попало
+  if (readen > userbufsz)
+    c.readdata.readen_end += readen - userbufsz;
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
 
