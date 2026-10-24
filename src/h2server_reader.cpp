@@ -141,6 +141,7 @@ dd::task<int> start_server_reader_for(h2server_session& session) try {
       session.rst_stream_after_error(e);
       // do not require connection close
     }
+    con.validate_pending_reply_frames();
 
     // connection control flow (streamlevel in server_handle_frame)
     if (con.my_window_size < MAX_WINDOW_SIZE / 2)

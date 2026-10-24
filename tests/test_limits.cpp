@@ -189,6 +189,41 @@ SERVER_TEST("refused stream keeps hpack state") {
   REQUIRE(std::ranges::find(rsp.headers, header{"x-cached", "3"}) != rsp.headers.end());
 }
 
+// пачка PING, на каждый из которых нужно ответить
+static std::vector<byte_t> pings(size_t count) {
+  std::vector<byte_t> bytes;
+  bytes.reserve(count * (FRAME_HEADER_LEN + 8));
+  for (size_t i = 0; i < count; ++i)
+    ping_frame::form(uint64_t(i), /*request_answer=*/true, std::back_inserter(bytes));
+  return bytes;
+}
+
+// Клиент шлёт PING, но не читает ответы, поэтому сервер не может их отправить.
+// Сервер должен закрыть соединение, а не копить ответы в памяти
+// Сначала ответы заполняют буферы ядра, их размер зависит от системы, поэтому PING отправляются пачками
+SERVER_TEST("client does not read replies") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  REQUIRE(server.sessions_count() == 1);
+  for (int i = 0; i < 20 && server.sessions_count() != 0; ++i) {
+    co_await client.send_raw_frame(pings(50'000));
+    co_await net.sleep(ioctx, std::chrono::milliseconds(10));
+  }
+  REQUIRE(server.sessions_count() == 0);
+}
+
+// то же самое для клиента
+CLIENT_TEST("server does not read replies") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  REQUIRE(client.connected());
+  for (int i = 0; i < 20 && client.connected(); ++i) {
+    co_await server.send_raw_frame(pings(50'000));
+    co_await net.sleep(ioctx, std::chrono::milliseconds(10));
+  }
+  REQUIRE(!client.connected());
+}
+
 SERVER_TEST("big requests") {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);

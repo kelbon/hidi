@@ -25,6 +25,11 @@ struct h2client_options {
   bool allow_requests_before_server_settings = true;
   // cannot be > 1 GB
   uint32_t max_continuation_len_bytes = uint32_t(-1);
+  // Сколько кадров, отправляемых в ответ на кадры сервера (PING ACK, SETTINGS ACK, RST_STREAM,
+  // WINDOW_UPDATE), может одновременно ждать записи. Если сервер шлёт такие кадры, но не читает ответы, они
+  // копятся в памяти
+  // При превышении соединение закрывается
+  uint32_t max_pending_reply_frames = 1000;
   log_context logctx = {};
 };
 

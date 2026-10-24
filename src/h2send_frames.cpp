@@ -6,6 +6,24 @@
 
 namespace hidi {
 
+namespace {
+
+// учитывает кадр в h2connection::pending_reply_frames, пока он не записан
+struct pending_reply_guard {
+  h2connection& con;
+
+  explicit pending_reply_guard(h2connection& c) noexcept : con(c) {
+    ++con.pending_reply_frames;
+  }
+  ~pending_reply_guard() {
+    --con.pending_reply_frames;
+  }
+  pending_reply_guard(pending_reply_guard&&) = delete;
+  void operator=(pending_reply_guard&&) = delete;
+};
+
+}  // namespace
+
 dd::task<bool> send_goaway(h2connection_ptr con, stream_id_t laststreamid, errc_e errc, std::string dbginfo) {
   if (!con || con->is_dropped())
     co_return false;
@@ -41,6 +59,7 @@ dd::task<void> send_rst_stream(h2connection_ptr con, stream_id_t streamid, errc_
     co_return;
 
   HTTP2_LOG_TRACE(con->logctx, "sending rst stream: id: {}, errc: {}", streamid, e2str(errc));
+  pending_reply_guard guard(*con);
   byte_t bytes[rst_stream::LEN];
   rst_stream::form(streamid, errc, bytes);
   HIDI_WAIT_WRITE(*con);
@@ -59,6 +78,7 @@ dd::task<void> send_settings_ack(h2connection_ptr con) {
     co_return;
 
   HTTP2_LOG_TRACE(con->logctx, "sending settings ack");
+  pending_reply_guard guard(*con);
   bytes_t bytes;
   accepted_settings_frame().form(std::back_inserter(bytes));
   HIDI_WAIT_WRITE(*con);
@@ -73,6 +93,7 @@ dd::task<bool> send_ping(h2connection_ptr con, uint64_t data, bool request_pong)
     co_return false;
 
   HTTP2_LOG_TRACE(con->logctx, "sending ping");
+  pending_reply_guard guard(*con);
   io_error_code ec;
   byte_t buf[ping_frame::LEN];
   ping_frame::form(data, request_pong, buf);
@@ -100,6 +121,7 @@ dd::task<bool> send_window_update(h2connection_ptr con, stream_id_t id, uint32_t
   if (!con || con->is_dropped())
     co_return false;
 
+  pending_reply_guard guard(*con);
   byte_t buf[window_update_frame::LEN];
   window_update_frame::form(id, inc, buf);
   HTTP2_LOG_TRACE(con->logctx, "sending window update: stream: {}, inc: {}", id, inc);

@@ -170,6 +170,7 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
     self->m_connection->writer.handle = nullptr;
     assert(self->m_options.max_continuation_len_bytes <= MAX_CONTINUATION_LEN);
     self->m_connection->max_continuation_len = self->m_options.max_continuation_len_bytes;
+    self->m_connection->max_pending_reply_frames = self->m_options.max_pending_reply_frames;
 
     start_reader_for(self, new_connection);
     // writer itself sets writer handle in connection
@@ -345,6 +346,7 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
         }
         // do not require connection close
       }
+      con.validate_pending_reply_frames();
 
       // connection control flow (streamlevel in handle_frame)
       if (con.my_window_size < MAX_WINDOW_SIZE / 2)

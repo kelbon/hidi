@@ -288,6 +288,10 @@ struct h2connection {
   size_t used_bytes = 0;
   size_t used_bytes_limit = size_t(-1);
   uint32_t max_continuation_len = uint32_t(-1);
+  // число ещё не записанных PING ACK, SETTINGS ACK, RST_STREAM, WINDOW_UPDATE
+  // Если пир шлёт кадры, требующие ответа, но не читает ответы, они копятся бесконечно
+  uint32_t pending_reply_frames = 0;
+  uint32_t max_pending_reply_frames = uint32_t(-1);
 
   explicit h2connection(any_connection_t&& c, any_io_context_ref);
 
@@ -517,6 +521,15 @@ struct h2connection {
     if (is_idle_stream(r.header.streamid)) {
       throw protocol_error(errc_e::PROTOCOL_ERROR,
                            std::format("RST_STREAM frame on a idle stream {}", r.header.streamid));
+    }
+  }
+
+  // вызывается reader после обработки каждого кадра
+  void validate_pending_reply_frames() const {
+    if (pending_reply_frames > max_pending_reply_frames) [[unlikely]] {
+      throw protocol_error(
+          errc_e::ENHANCE_YOUR_CALM,
+          std::format("peer does not read replies, frames waiting to be written: {}", pending_reply_frames));
     }
   }
 
