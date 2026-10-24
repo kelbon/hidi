@@ -274,11 +274,13 @@ void h2connection::server_settings_changed(h2frame newsettings) {
 
 void h2connection::server_requests_graceful_shutdown(goaway_frame f) {
   HTTP2_LOG_TRACE(logctx, "graceful shutdown initiated: last stream id: {}", f.last_streamid);
-  // if we did not initiate this graceful shutdown
-  if (!graceful_shutdown_goaway_sended) {
-    initiate_graceful_shutdown(f.last_streamid);
-    graceful_shutdown_goaway_sended = true;
-  }
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8-14
+  // Сервер может прислать несколько GOAWAY подряд: сначала с last_stream_id == MAX_STREAM_ID как
+  // предупреждение, затем с реальным значением. Каждый обрабатывается, потому что стримы, которые сервер не
+  // обработает (id > last_stream_id), нужно завершить сразу, чтобы запрос можно было повторить
+  // Также это нужно когда graceful shutdown начал сам клиент (graceful_stop)
+  initiate_graceful_shutdown(f.last_streamid);
+  graceful_shutdown_goaway_sended = true;
   // do not drop connection, graceful_stop will do it or reader (its out of streams)
 }
 
