@@ -190,5 +190,35 @@ CLIENT_TEST("request canceled by destroy") {
   REQUIRE(h.promise().result_or_rethrow().status == 200);
 }
 
+// https://www.rfc-editor.org/rfc/rfc9113.html#section-8.5
+// CONNECT содержит :method и :authority (адрес, куда серверу подключиться), без :scheme и :path
+CLIENT_TEST("CONNECT request contains :authority") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  http_request req = make_request(client, http_method_e::CONNECT);
+  req.authority = "example.com:443";
+  auto makestream = [](http_response, memory_queue_ptr, request_context) -> streaming_body_t { co_return; };
+  auto h = client.send_connect_request(std::move(req), makestream, deadline_after(10s)).start_and_detach(true);
+  on_scope_exit {
+    h.destroy();
+  };
+  hdrs_and_data r;
+  for (;;) {
+    h2test_frame f = co_await server.receive_frame(deadline_after(5s));
+    if (f.hdr.type != frame_e::HEADERS)
+      continue;
+    hpack::decode_headers_block(server.get_inner_connection()->decoder, f.data,
+                                [&](std::string_view name, std::string_view value) {
+                                  r.headers.push_back({std::string(name), std::string(value)});
+                                });
+    break;
+  }
+  REQUIRE(r.find_hdr(":method") == "CONNECT");
+  REQUIRE(r.find_hdr(":authority") == "example.com:443");
+  REQUIRE(r.find_hdr(":path").empty());
+  REQUIRE(r.find_hdr(":scheme").empty());
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

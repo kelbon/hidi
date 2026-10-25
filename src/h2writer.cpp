@@ -56,6 +56,7 @@ static void generate_http2_connect_headers(const h2stream& node, hpack::encoder&
     // https://www.rfc-editor.org/rfc/rfc9113.html#name-the-connect-method
     // :path :scheme MUST be omitted, authority required
     assert(!req.authority.empty());  // must be setted, address for server TCP connection
+    encoder.encode_with_cache(hpack::static_table_t::authority, req.authority, out);
   }
   for (auto& h : req.headers)
     encoder.encode(h.name(), h.value(), out);
