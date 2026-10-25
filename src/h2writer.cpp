@@ -395,27 +395,26 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
     assert(!con->requests.empty());
 
     while (!con->requests.empty()) {
+      if constexpr (IS_CLIENT) {
+        // запрос ждёт слот, оставаясь в requests: так при таймауте он завершится без RST_STREAM (см.
+        // finish_request_by_timeout), а при разрыве соединения - в finish_all_with_reason
+        while (con->concurrent_streams_now() >= con->remote_settings.max_concurrent_streams) [[unlikely]] {
+          HTTP2_LOG_TRACE(con->logctx, "too many streams, waiting (max is {})",
+                          con->remote_settings.max_concurrent_streams);
+          co_await yield_on_ioctx(con->ioctx);
+          if (con->is_dropped())
+            goto end;
+        }
+        // все ожидавшие запросы могли завершиться по таймауту
+        if (con->requests.empty())
+          break;
+      }
       stream_ptr node = &con->requests.front();
 
       con->requests.pop_front();
       con->insert_response_node(*node);
 
       // send headers
-
-      if constexpr (IS_CLIENT) {
-        // node уже в responses (insert_response_node выше), то есть учтён в concurrent_streams_now()
-        while (con->concurrent_streams_now() > con->remote_settings.max_concurrent_streams) [[unlikely]] {
-          HTTP2_LOG_TRACE(con->logctx, "too many streams, waiting (max is {})",
-                          con->remote_settings.max_concurrent_streams);
-          co_await yield_on_ioctx(con->ioctx);
-          if (ec || con->is_dropped()) {
-            if (ec != boost::asio::error::operation_aborted)
-              con->finish_request(*node, reqerr_e::NETWORK_ERR);
-
-            goto end;
-          }
-        }
-      }
 
       headers.resize(H2FHL);  // reserve for frame header
 

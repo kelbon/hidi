@@ -318,7 +318,7 @@ void h2connection::forget(h2stream& node) noexcept {
     erase_byref(timers, node);
 }
 
-void h2connection::finish_request(h2stream& node, int status) noexcept {
+void h2connection::finish_request(h2stream& node, int status, bool send_rst) noexcept {
   forget(node);
   if (!node.task)
     return;
@@ -332,7 +332,7 @@ void h2connection::finish_request(h2stream& node, int status) noexcept {
   node.status = status;
   stream_ptr p = &node;  // hold node
   auto t = std::exchange(node.task, nullptr);
-  if (status == reqerr_e::CANCELLED || status == reqerr_e::TIMEOUT) {
+  if (send_rst && (status == reqerr_e::CANCELLED || status == reqerr_e::TIMEOUT)) {
     // ignore possible bad alloc for coroutine
     send_rst_stream(this, node.streamid, errc_e::CANCEL).start_and_detach();
   }

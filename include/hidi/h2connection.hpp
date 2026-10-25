@@ -405,7 +405,8 @@ struct h2connection {
 
   // ALL streams must be finished by calling this function except when user
   // exception throwed from on_header/on_data_part callbacks
-  void finish_request(h2stream& node, int status) noexcept;
+  // `send_rst` == false запрещает RST_STREAM при отмене / таймауте
+  void finish_request(h2stream& node, int status, bool send_rst = true) noexcept;
 
   // client side
   // used only when user exception throwed from on_header/on_data_part callbacks
@@ -417,8 +418,12 @@ struct h2connection {
   // returns false if no such stream
   [[nodiscard]] bool rststream_client(rst_stream rstframe);
 
+  // client side
   void finish_request_by_timeout(h2stream& node) noexcept {
-    finish_request(node, reqerr_e::TIMEOUT);
+    // запрос ещё в очереди писателя, HEADERS не отправлены и для сервера стрим idle. RST_STREAM на idle стрим
+    // - ошибка всего соединения https://www.rfc-editor.org/rfc/rfc9113.html#section-6.4-7
+    bool sent = !node.requests_hook.is_linked();
+    finish_request(node, reqerr_e::TIMEOUT, sent);
   }
 
   void finish_all_with_reason(reqerr_e::values_e reason);
