@@ -17,7 +17,8 @@ struct memory_queue {
   bytes_t bytes;
   std::coroutine_handle<> waiter = nullptr;
   stream_ptr n = nullptr;
-  bool eof = false;  // true if last data frame was received
+  bool eof = false;          // true if last data frame was received
+  bool aborted_eof = false;  // см. `aborted`
   ZAL_PIN;
 
   struct data_awaiter {
@@ -63,16 +64,15 @@ struct memory_queue {
     return eof;
   }
 
-  // for using with function ref
-  void operator()(std::span<const byte_t> b, bool lastframe) {
-    // Note: order: set EOF, then push,
-    // so if push will wait data again it will produce empty data (EOF marker)
-    if (lastframe)
-      eof = true;
-    bytes.insert(bytes.end(), b.begin(), b.end());
-    if (waiter)
-      std::exchange(waiter, nullptr).resume();
+  // true, если данные оборваны: стрим завершился без END_STREAM от собеседника (RST_STREAM, разрыв
+  // соединения, таймаут, отмена). Тогда EOF не нормальный конец данных, и канал может закрыть свою сторону
+  // аварийно (например RST вместо FIN у сокета, в который он перекладывает данные)
+  [[nodiscard]] bool aborted() const noexcept {
+    return aborted_eof;
   }
+
+  // for using with function ref
+  void operator()(std::span<const byte_t> b, bool lastframe);
 
   friend void intrusive_ptr_add_ref(memory_queue* p) noexcept {
     ++p->refcount;

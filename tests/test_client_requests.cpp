@@ -71,16 +71,18 @@ static http_request make_request(h2client& client, http_method_e method = http_m
 }
 
 // канал CONNECT, читает данные от сервера до EOF
-static streaming_body_t tunnel_reader(memory_queue_ptr q, bool& started, bool& ended) {
+static streaming_body_t tunnel_reader(memory_queue_ptr q, bool& started, bool& ended, bool& aborted) {
   started = true;
   while (!q->last_chunk_received())
     (void)co_await q->next_chunk();
+  aborted = q->aborted();
   ended = true;
   co_return;
 }
 
 // Запрос отменяется уничтожением его корутины на разных стадиях. Если HEADERS уже отправлены, сервер получает
-// RST_STREAM и больше ничего по этому стриму, а соединение продолжает работать
+// RST_STREAM и больше ничего по этому стриму, а соединение продолжает работать. Туннель CONNECT также
+// отменяется сервером: канал видит оборванные данные (memory_queue::aborted)
 CLIENT_TEST("request canceled by destroy") {
   h2client_options opts = client.get_options();
   // иначе запрос не ждёт установки соединения
@@ -164,8 +166,9 @@ CLIENT_TEST("request canceled by destroy") {
   SECTION("CONNECT tunnel") {
     bool started = false;
     bool ended = false;
+    bool aborted = false;
     auto makestream = [&](http_response, memory_queue_ptr q, request_context) {
-      return tunnel_reader(std::move(q), started, ended);
+      return tunnel_reader(std::move(q), started, ended, aborted);
     };
     auto h = client
                  .send_connect_request(make_request(client, http_method_e::CONNECT), makestream,
@@ -178,6 +181,28 @@ CLIENT_TEST("request canceled by destroy") {
     co_await server.receive_rst_stream(1, errc_e::CANCEL);
     // канал не должен ждать данных вечно
     co_await wait_until([&] { return ended; }, ioctx);
+    REQUIRE(aborted);
+  }
+  SECTION("CONNECT tunnel reset by server") {
+    bool started = false;
+    bool ended = false;
+    bool aborted = false;
+    auto makestream = [&](http_response, memory_queue_ptr q, request_context) {
+      return tunnel_reader(std::move(q), started, ended, aborted);
+    };
+    auto h = client
+                 .send_connect_request(make_request(client, http_method_e::CONNECT), makestream,
+                                       deadline_after(10s))
+                 .start_and_detach(true);
+    on_scope_exit {
+      h.destroy();
+    };
+    co_await receive_headers();
+    co_await server.send_headers(1, ok, /*endstream=*/false);
+    co_await wait_until([&] { return started; }, ioctx);
+    co_await server.send_rst_stream(1, errc_e::CANCEL);
+    co_await wait_until([&] { return ended && h.done(); }, ioctx);
+    REQUIRE(aborted);
   }
   // по отменённому стриму больше ничего не отправляется, иначе sync завершится с ошибкой
   co_await server.sync();

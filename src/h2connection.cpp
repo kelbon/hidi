@@ -74,9 +74,8 @@ void h2stream::receive_trailers_headers(hpack::decoder& decoder, h2frame frame) 
   constexpr auto mask = flags::END_STREAM | flags::END_HEADERS;
   if (((frame.header.flags & mask) != mask))
     throw protocol_error(errc_e::STREAM_CLOSED, "trailers header without END_STREAM | END_HEADERS");
-  on_scope_exit {
-    end_stream_received = true;
-  };
+  // до колбеков: memory_queue по нему отличает END_STREAM от обрыва
+  end_stream_received = true;
   hpack::decode_headers_block(decoder, frame.data, [&](std::string_view name, std::string_view value) {
     HTTP2_LOG_TRACE(this->logctx(), "name: {}, value: {}", name, value);
     validate_trailer_header(name, frame.header.streamid);
@@ -152,9 +151,8 @@ void h2stream::receive_response_headers(hpack::decoder& decoder, h2frame frame) 
 void h2stream::receive_response_data(h2frame frame) {
   assert(frame.header.streamid == streamid);
   assert(frame.header.type == frame_e::DATA);
-  on_scope_exit {
-    end_stream_received = frame.header.flags & flags::END_STREAM;
-  };
+  // до колбека: memory_queue по нему отличает END_STREAM от обрыва
+  end_stream_received = frame.header.flags & flags::END_STREAM;
   decrease_window_size(rl_streamlevel_windowsize, int32_t(frame.header.length), logctx());
   if (rl_streamlevel_windowsize < MAX_WINDOW_SIZE / 2 && !(frame.header.flags & flags::END_STREAM))
     update_window_to_max(stream_ptr(this), connection).start_and_detach();
@@ -212,6 +210,8 @@ void h2stream::receive_request_data(h2frame frame) {
     }
     req.body.data.insert(req.body.data.end(), frame.data.begin(), frame.data.end());
   } else {
+    // до колбека: memory_queue по нему отличает END_STREAM от обрыва
+    end_stream_received = frame.header.flags & flags::END_STREAM;
     (*on_data_part_fn)(frame.data, frame.header.flags& flags::END_STREAM);
   }
 }
@@ -339,6 +339,10 @@ void h2connection::finish_request(h2stream& node, int status, bool send_rst) noe
   node.status = status;
   stream_ptr p = &node;  // hold node
   auto t = std::exchange(node.task, nullptr);
+  if (node.is_connect_request() && node.on_data_part_fn) {
+    // канал CONNECT читает данные из memory_queue и иначе ждал бы их вечно
+    (*node.on_data_part_fn)({}, /*last chunk*/ true);
+  }
   if (send_rst && (status == reqerr_e::CANCELLED || status == reqerr_e::TIMEOUT)) {
     // ignore possible bad alloc for coroutine
     send_rst_stream(this, node.streamid, errc_e::CANCEL).start_and_detach();
