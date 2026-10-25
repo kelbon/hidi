@@ -26,6 +26,18 @@ static std::vector<byte_t> settings_with_len_5() {
   return bytes;
 }
 
+// Первый SETTINGS ограничен начальным SETTINGS_MAX_FRAME_SIZE (16384). Больший отклоняется сразу по
+// заголовку, а не ждёт данных до таймаута соединения
+SERVER_TEST("too big first SETTINGS") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await client.send_client_magic();
+  std::vector<byte_t> bytes;
+  frame_header{.length = 6 * 3000, .type = frame_e::SETTINGS, .flags = 0, .streamid = 0}.form(
+      std::back_inserter(bytes));
+  co_await client.send_raw_frame(std::move(bytes));
+  co_await client.wait_connection_dropped(deadline_after(1s));
+}
+
 SERVER_TEST("SETTINGS with len not multiple of 6") {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);

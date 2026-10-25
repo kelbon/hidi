@@ -7,6 +7,15 @@
 
 namespace hidi {
 
+// https://www.rfc-editor.org/rfc/rfc9113.html#section-4.2
+// первый SETTINGS отправляется до обмена настройками, поэтому ограничен начальным SETTINGS_MAX_FRAME_SIZE
+static void validate_first_settings_len(const frame_header& header) {
+  if (header.length > MIN_MAX_FRAME_LEN) {
+    throw protocol_error(errc_e::FRAME_SIZE_ERROR,
+                         std::format("first SETTINGS frame is too big, len: {}", header.length));
+  }
+}
+
 static void validate_first_server_frame_header(const frame_header& header, const log_context& logctx) {
   if (header.type != frame_e::SETTINGS || header.length > FRAME_LEN_MAX) {
     HTTP2_LOG(logctx, ERROR, "first server frame is not settings, frame: {}", header);
@@ -17,6 +26,7 @@ static void validate_first_server_frame_header(const frame_header& header, const
     HTTP2_LOG(logctx, ERROR, "invalid server preface SETTINGS with ACK flag");
     throw protocol_error(errc_e::CONNECT_ERROR, "invalid server preface SETTINGS with ACK flag");
   }
+  validate_first_settings_len(header);
 }
 
 static void validate_client_magic(std::span<byte_t> magic, const log_context& logctx) {
@@ -165,6 +175,7 @@ dd::task<h2connection_ptr> establish_http2_session_server(h2connection_ptr con, 
     settingsheader = frame_header::parse(settingsframe);
   }
   validate_settings_not_ack_frame(settingsheader);
+  validate_first_settings_len(settingsheader);
 
   {  // read settings data
     std::span settingsdata = buf.get_exactly(settingsheader.length);
