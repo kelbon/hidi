@@ -100,6 +100,9 @@ void h2stream::receive_request_trailers(hpack::decoder& decoder, h2frame hdrs) {
   };
   bool memory_limit_exceeded = false;
   auto onheader = [&](std::string_view name, std::string_view value) {
+    // запрос bistream (answer_before_data) уже отдан пользователю, трейлеры клиента игнорируются
+    if (answered_before_data)
+      return;
     if (memory_limit_exceeded || !use_bytes(name.size() + value.size())) [[unlikely]] {
       // not throw, maintain dynamic table anyway
       memory_limit_exceeded = true;
