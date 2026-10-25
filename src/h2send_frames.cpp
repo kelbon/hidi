@@ -139,10 +139,9 @@ dd::task<void> update_window_to_max(stream_ptr node, h2connection_ptr con) try {
   // * sending DATA before settings exchange
   // * updating settings value SETTINGS_INITIAL_WINDOW_SIZE
   while (size < 0) {
-    // avoid too big window size increment
-    if (co_await send_window_update(con, streamid, MAX_WINDOW_SIZE))
-      increment_window_size_trusted(size, MAX_WINDOW_SIZE);
-    else
+    // если запись не удалась, соединение уже не рабочее и размер окна не важен
+    increment_window_size_trusted(size, MAX_WINDOW_SIZE);
+    if (!co_await send_window_update(con, streamid, MAX_WINDOW_SIZE))
       co_return;
 
     if (con->is_dropped())
@@ -151,8 +150,8 @@ dd::task<void> update_window_to_max(stream_ptr node, h2connection_ptr con) try {
   if (size != MAX_WINDOW_SIZE) [[likely]] {
     static_assert(std::numeric_limits<uint32_t>::max() > MAX_WINDOW_SIZE);
     uint32_t inc = uint32_t(MAX_WINDOW_SIZE - size);
-    if (co_await send_window_update(con, streamid, inc))
-      increment_window_size_trusted(size, int32_t(inc));
+    increment_window_size_trusted(size, int32_t(inc));
+    (void)co_await send_window_update(con, streamid, inc);
   }
 } catch (std::exception& e) {
   // do not finish streams / send goaway. Will repeat try to update window later

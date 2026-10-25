@@ -21,7 +21,8 @@ TRANSPORT_TEST("shutdown does not wait for blocked write") {
   any_io_context ioctx = make_asio_io_context(rawio);
   any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true);
   a.listen();
-  any_connection_t peer = co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
+  any_connection_t peer =
+      co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
   io_error_code ec;
   any_connection_t con = co_await a.accept(ec);
   REQUIRE(!ec);
@@ -84,7 +85,8 @@ SERVER_TEST("silent TCP connection is dropped by connection timeout", test_ssl_c
   REQUIRE(server.sessions_count() == 0);
 }
 
-// подключается к серверу как TLS клиент, предлагающий в ALPN `offer`, и возвращает выбранный сервером протокол
+// подключается к серверу как TLS клиент, предлагающий в ALPN `offer`
+// и возвращает выбранный сервером протокол
 static dd::task<std::string> alpn_selected_by_server(any_io_context& io, internet_address addr,
                                                      std::vector<unsigned char> offer) {
   namespace ssl = boost::asio::ssl;
@@ -168,7 +170,8 @@ TRANSPORT_TEST("write under backpressure") {
   SECTION("TLS") {
     tls = true;
   }
-  tcp_connection_options opts{.send_buffer_size = SMALL_SOCKET_BUFFER, .receive_buffer_size = SMALL_SOCKET_BUFFER};
+  tcp_connection_options opts{.send_buffer_size = SMALL_SOCKET_BUFFER,
+                              .receive_buffer_size = SMALL_SOCKET_BUFFER};
   any_io_context ioctx = tls ? make_asio_tls_io_context(rawio, make_ssl_context_for_client({}), opts)
                              : make_asio_io_context(rawio, opts);
   boost::asio::ip::tcp::acceptor a(rawio, localhost());
