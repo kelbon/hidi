@@ -270,5 +270,42 @@ TEST("timer re-arm ignores canceled wait") {
   }
 }
 
+// h2server_mt принимает соединение в одном потоке и переносит его в io_context другого (rebind_context).
+// Соединение должно остаться неблокирующим: иначе синхронный write_some в try_write при полном буфере
+// блокирует весь рабочий поток
+TRANSPORT_TEST("connection stays non-blocking after rebind") {
+  boost::asio::io_context other;
+  bool tls = false;
+  SECTION("TCP") {
+  }
+  SECTION("TLS") {
+    tls = true;
+  }
+  any_io_context ioctx = tls ? make_asio_tls_io_context(rawio, test_ssl_ctx()) : make_asio_io_context(rawio);
+  any_io_context target = tls ? make_asio_tls_io_context(other, test_ssl_ctx()) : make_asio_io_context(other);
+  any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true);
+  a.listen();
+  any_io_context plain = make_asio_io_context(rawio);
+  any_connection_t peer = co_await plain.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
+  io_error_code ec;
+  any_connection_t con = co_await a.accept(ec);
+  REQUIRE(!ec);
+
+  aa::invoke<rebind_context_m>(ioctx)(con, *&target);
+
+  if (tls) {
+    auto* c = dynamic_cast<asio_tls_connection*>(con.get());
+    REQUIRE(c);
+    REQUIRE(c->sock.lowest_layer().non_blocking());
+    REQUIRE(&c->sock.get_executor().context() == &other);
+  } else {
+    auto* c = dynamic_cast<asio_connection*>(con.get());
+    REQUIRE(c);
+    REQUIRE(c->sock.non_blocking());
+    REQUIRE(&c->sock.get_executor().context() == &other);
+  }
+  co_await peer->shutdown();
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

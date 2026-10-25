@@ -70,6 +70,11 @@ static void rebind_executor(asio_connection& c, asio::io_context& new_ioctx) {
   ec = newsock.assign(p, rawsock, ec);
   if (ec)
     throw network_exception(ec);
+  // assign не знает, что сокет был неблокирующим. Без этого синхронный write_some в try_write при полном
+  // буфере сокета ждёт в poll и блокирует весь поток
+  ec = newsock.non_blocking(true, ec);
+  if (ec)
+    throw network_exception(ec);
   c.sock = std::move(newsock);
 }
 
@@ -85,7 +90,15 @@ static void rebind_executor(asio_tls_connection& c, asio::io_context& new_ioctx)
   ec = newsock.assign(p, rawsock, ec);
   if (ec)
     throw network_exception(ec);
-  c.sock.lowest_layer() = std::move(newsock);
+  ec = newsock.non_blocking(true, ec);
+  if (ec)
+    throw network_exception(ec);
+  // rebind делается до TLS handshake (см. connection_i::handshake), состояния TLS ещё нет, поэтому
+  // ssl::stream пересоздаётся целиком. Его внутренние таймеры (pending_read_ / pending_write_) создаются на
+  // executor потока и при замене только сокета остались бы на старом io_context: ожидание одной операции TLS
+  // другой (например чтение, которому нужно записать ответ на KeyUpdate, пока идёт запись) завершалось бы в
+  // чужом потоке
+  c.sock = asio::ssl::stream<asio::ip::tcp::socket>(std::move(newsock), c.sslctx->ctx);
 }
 
 template <typename Connection, typename Context>
