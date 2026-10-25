@@ -542,7 +542,6 @@ stream_ptr h2connection::new_streaming_stream_node(http_request&& request, deadl
 void h2connection::return_node(h2stream* ptr) noexcept {
   assert(ptr && ptr->connection);
   forget(*ptr);
-  ptr->connection->mark_stream_closed(ptr->streamid);
   ptr->req = {};
   ptr->makebody.reset();
   // using always server settings, client creates requests, server controls
@@ -580,19 +579,21 @@ void h2connection::ignore_frame(h2frame frame) {
   // Note: sending frame for closed stream is only stream error, not protocol
   // because its possible that stream was canceled due timeout and then frame received
   switch (frame.header.type) {
-    case HEADERS:
+    case HEADERS: {
+      // до сдвига laststartedstreamid
+      bool closed = is_closed_stream(frame.header.streamid);
       // even if we ignoring frame, stream is done
       laststartedstreamid = std::max(laststartedstreamid, frame.header.streamid);
       // decode before all to ensure decoder will be in correct state
       // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8-19
       hpack::ignore_headers_block(decoder, frame.data);
 
-      if (is_closed_stream(frame.header.streamid)) {
+      if (closed) {
         throw stream_error(errc_e::STREAM_CLOSED, frame.header.streamid,
                            "HEADERS frame sent for closed stream");
       }
-      mark_stream_closed(frame.header.streamid);
       return;
+    }
     case DATA:
       // NOTE: not using data.size(), since padding should be counted as received
       // octets

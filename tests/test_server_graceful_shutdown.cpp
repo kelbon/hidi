@@ -36,5 +36,32 @@ SERVER_TEST("graceful shutdown does not refuse trailers of active stream") {
   REQUIRE(rsp.body == body);
 }
 
+// после начала graceful shutdown новый стрим отклоняется с REFUSED_STREAM, чтобы клиент мог повторить запрос
+// на другом соединении (STREAM_CLOSED повторять нельзя)
+SERVER_TEST("graceful shutdown refuses new streams") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+
+  std::vector<header> hdrs{
+      {":method", "POST"},
+      {":path", "/"},
+      {":scheme", "http"},
+      {":authority", addr.address().to_string()},
+  };
+  // активный стрим не даёт сессии завершиться сразу после GOAWAY
+  co_await client.send_req(1, hdrs, http_body_bytes(10, byte_t('a')), /*endstream=*/false);
+  co_await client.sync();
+
+  server.shutdown().start_and_detach();
+  co_await client.receive_goaway(/*last_streamid=*/1, errc_e::NO_ERROR, ping_e::RESPONSE);
+
+  co_await client.send_req(3, hdrs);
+  co_await client.receive_rst_stream(3, errc_e::REFUSED_STREAM);
+  // HPACK декодер сервера не сломан: трейлеры активного стрима обрабатываются
+  auto trailers = client.encode_headers({{"x-trailer", "t"}});
+  co_await client.send_raw_hdr(1, trailers, /*end_stream=*/true);
+  REQUIRE((co_await client.receive_rsp()).streamid == 1);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

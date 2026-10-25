@@ -298,20 +298,15 @@ void h2server_session::start_request_assemble(const h2frame& frame, h2stream* ex
                     frame.header.streamid, connection->laststartedstreamid));
   }
 
-  stream_id_t first_skipped = connection->laststartedstreamid == 0 ? 1 : connection->laststartedstreamid + 2;
-  if (first_skipped < frame.header.streamid)
-    connection->mark_streams_closed(first_skipped, frame.header.streamid - 2);
   // Note: before making a decision about a stream, to keep in mind the client's desire to create such stream
   connection->laststartedstreamid = frame.header.streamid;
 
-  if (connection->is_closed_stream(frame.header.streamid)) {
-    throw protocol_error(errc_e::STREAM_CLOSED,
-                         std::format("stream already closed, but received HEADERS frame. Stream id: {}",
-                                     frame.header.streamid));
-  } else if (requests_left_approx() >= connection->local_settings.max_concurrent_streams) {
+  if (requests_left_approx() >= connection->local_settings.max_concurrent_streams) {
     size_t exactreq = requests_left_exactly();
     if (exactreq >= connection->local_settings.max_concurrent_streams) {
-      connection->ignore_frame(frame);
+      // не ignore_frame: id уже учтён в laststartedstreamid и стрим выглядел бы закрытым (STREAM_CLOSED
+      // вместо REFUSED_STREAM)
+      hpack::ignore_headers_block(connection->decoder, frame.data);
       throw stream_error(errc_e::REFUSED_STREAM, frame.header.streamid,
                          std::format("refused due max concurrent streams exceeded, max count: {}, actual: {}",
                                      connection->local_settings.max_concurrent_streams, exactreq));

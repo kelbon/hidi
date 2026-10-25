@@ -10,7 +10,6 @@
 #include "hidi/utils/deadline.hpp"
 #include "hidi/utils/unique_name.hpp"
 #include "hidi/utils/fn_ref.hpp"
-#include "hidi/utils/merged_segments.hpp"
 #include "hidi/asio/aio_context.hpp"
 
 #include <span>
@@ -280,8 +279,6 @@ struct h2connection {
   // invariant: has_value()
   any_timer timeout_warden_timer;
   bi::slist<h2stream, requests_member_hook_t, bi::constant_time_size<true>> free_nodes;
-  // all done stream ids stored here (before adding or search / 2 to map 1 3 5 to 0 1 2)
-  merged_segments closed_streams;
   log_context logctx;
   any_io_context_ref ioctx;
   // for supporting h2server_options::limit_requests_memory_usage_bytes
@@ -310,17 +307,11 @@ struct h2connection {
       [[unlikely]];                                          \
   }
 
-  void mark_stream_closed(stream_id_t id) noexcept {
-    closed_streams.add_point(id / 2);
-  }
-
-  // precondition: first <= last
-  void mark_streams_closed(stream_id_t first, stream_id_t last) {
-    closed_streams.add_segment(first / 2, last / 2);
-  }
-
+  // precondition: стрима с этим id нет среди активных (requests / responses)
+  // Стрим, который уже начат и не активен, закрыт. Это относится и к id, пропущенным пиром: первое
+  // использование нового id неявно закрывает все idle стримы с меньшими id
   bool is_closed_stream(stream_id_t id) const noexcept {
-    return closed_streams.has_point(id / 2);
+    return !is_idle_stream(id);
   }
 
   // stream not yet started
