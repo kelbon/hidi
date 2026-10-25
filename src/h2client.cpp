@@ -654,6 +654,9 @@ dd::task<int> h2client::send_connect_request(
     // do not wait this stream, instead waiting RST_STREAM / END_STREAM flag
     (void)write_stream_data</*IS_CLIENT=*/true>(node, con, new writer_callbacks(neterrcb));
   });
+  // исключение из канала пользователя уже лежит в promise (finish_request_with_user_exception)
+  if ((co_await dd::this_coro::handle).promise().has_exception()) [[unlikely]]
+    co_return dd::rvo;
   co_return status;
 }
 

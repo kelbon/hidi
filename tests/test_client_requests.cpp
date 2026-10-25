@@ -89,7 +89,8 @@ CLIENT_TEST("request canceled by destroy") {
   auto server = co_await fake_server_session(ioctx, {localhost()}, client);
   server.set_max_concurrent_streams(1);
 
-  using handle_t = decltype(client.send_request(make_request(client), deadline_t::never()).start_and_detach(true));
+  using handle_t =
+      decltype(client.send_request(make_request(client), deadline_t::never()).start_and_detach(true));
   // HEADERS запроса с телом (receive_req ожидает тело одним DATA)
   auto receive_headers = [&]() -> dd::task<void> {
     for (;;) {
@@ -149,8 +150,9 @@ CLIENT_TEST("request canceled by destroy") {
     stream_body_maker_t body = [&](http_headers_t&, request_context) {
       return two_parts_body(send_second, second_yielded, ioctx);
     };
-    auto h = client.send_streaming_request(make_request(client, http_method_e::PUT), std::move(body),
-                                           deadline_after(10s))
+    auto h = client
+                 .send_streaming_request(make_request(client, http_method_e::PUT), std::move(body),
+                                         deadline_after(10s))
                  .start_and_detach(true);
     co_await receive_headers();
     (void)co_await server.receive_data(1);
@@ -165,8 +167,9 @@ CLIENT_TEST("request canceled by destroy") {
     auto makestream = [&](http_response, memory_queue_ptr q, request_context) {
       return tunnel_reader(std::move(q), started, ended);
     };
-    auto h = client.send_connect_request(make_request(client, http_method_e::CONNECT), makestream,
-                                         deadline_after(10s))
+    auto h = client
+                 .send_connect_request(make_request(client, http_method_e::CONNECT), makestream,
+                                       deadline_after(10s))
                  .start_and_detach(true);
     co_await receive_headers();
     co_await server.send_headers(1, ok, /*endstream=*/false);
@@ -199,7 +202,8 @@ CLIENT_TEST("CONNECT request contains :authority") {
   http_request req = make_request(client, http_method_e::CONNECT);
   req.authority = "example.com:443";
   auto makestream = [](http_response, memory_queue_ptr, request_context) -> streaming_body_t { co_return; };
-  auto h = client.send_connect_request(std::move(req), makestream, deadline_after(10s)).start_and_detach(true);
+  auto h =
+      client.send_connect_request(std::move(req), makestream, deadline_after(10s)).start_and_detach(true);
   on_scope_exit {
     h.destroy();
   };
@@ -218,6 +222,57 @@ CLIENT_TEST("CONNECT request contains :authority") {
   REQUIRE(r.find_hdr(":authority") == "example.com:443");
   REQUIRE(r.find_hdr(":path").empty());
   REQUIRE(r.find_hdr(":scheme").empty());
+}
+
+// Исключение из on_header завершает задачу запроса, как обычное исключение: задача доходит до конца при
+// любом способе запуска, а клиент не считает запрос активным
+CLIENT_TEST("user exception completes request task") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  auto on_header = [](std::string_view, std::string_view) { throw std::runtime_error("user exception"); };
+  auto request = [&] {
+    return client.send_request(&on_header, nullptr, make_request(client), deadline_after(10s));
+  };
+  auto send_response = [&]() -> dd::task<void> {
+    (void)co_await server.receive_req();
+    std::vector<header> hdrs{{":status", "200"}, {"x-header", "value"}};
+    co_await server.send_headers(1, std::move(hdrs), /*endstream=*/false);
+  };
+  auto is_user_exception = [](auto& promise) {
+    try {
+      (void)promise.result_or_rethrow();
+    } catch (std::runtime_error&) {
+      return true;
+    }
+    return false;
+  };
+  SECTION("co_await after start()") {
+    bool caught = false;
+    auto waiter = [&]() -> dd::task<void> {
+      auto started = request().start();
+      try {
+        (void)co_await started;
+      } catch (std::runtime_error&) {
+        caught = true;
+      }
+    };
+    auto h = waiter().start_and_detach(/*stop_at_end=*/true);
+    on_scope_exit {
+      h.destroy();
+    };
+    co_await send_response();
+    co_await wait_until([&] { return caught; }, ioctx);
+  }
+  SECTION("start_and_detach(true)") {
+    auto h = request().start_and_detach(/*stop_at_end=*/true);
+    on_scope_exit {
+      h.destroy();
+    };
+    co_await send_response();
+    co_await wait_until([&] { return h.done(); }, ioctx);
+    REQUIRE(is_user_exception(h.promise()));
+  }
+  REQUIRE(client.count_active_requests() == 0);
 }
 
 REGISTER_TEST_LISTENER(moko3::gtest_listener);

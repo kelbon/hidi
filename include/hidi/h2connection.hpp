@@ -439,8 +439,7 @@ struct h2connection {
   // `send_rst` == false запрещает RST_STREAM при отмене / таймауте
   void finish_request(h2stream& node, int status, bool send_rst = true) noexcept;
 
-  // client side
-  // used only when user exception throwed from on_header/on_data_part callbacks
+  // used when user exception throwed from on_header/on_data_part callbacks
   // or if channel for streaming node throws
   // precondition: e != nullptr
   void finish_request_with_user_exception(h2stream& node, std::exception_ptr e) noexcept;
@@ -527,19 +526,24 @@ struct h2connection {
   struct response_awaiter {
     h2connection* con = nullptr;
     h2stream* n = nullptr;
+    dd::task<int>::handle_type self = nullptr;
 
     static bool await_ready() noexcept {
       return false;
     }
 
     std::coroutine_handle<> await_suspend(dd::task<int>::handle_type h) noexcept {
+      self = h;
       n->task = h;
       if (con->writer.handle)  // if writer waits job now
         return std::exchange(con->writer.handle, nullptr);
       return std::noop_coroutine();
     }
 
-    [[nodiscard]] int await_resume() const noexcept {
+    [[nodiscard]] int await_resume() const {
+      // исключение из колбеков пользователя (finish_request_with_user_exception)
+      if (self.promise().has_exception()) [[unlikely]]
+        std::rethrow_exception(self.promise().take_exception());
       return n->status;
     }
   };

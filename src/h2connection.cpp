@@ -344,23 +344,9 @@ void h2connection::finish_request(h2stream& node, int status, bool send_rst) noe
 }
 
 void h2connection::finish_request_with_user_exception(h2stream& node, std::exception_ptr e) noexcept {
-  forget(node);
-  if (!node.task)
-    return;
-  HTTP2_LOG_TRACE(logctx, "stream {} finished with user exception", node.streamid);
-  send_rst_stream(this, node.streamid, errc_e::CANCEL).start_and_detach();
-  // стрим завершён (finished()), иначе писатель продолжит отправлять DATA после RST_STREAM,
-  // а повторный finish_request разбудит уже уничтоженную корутину
-  auto task = std::exchange(node.task, nullptr);
-  task.promise().set_exception(std::move(e));
-  // Note: избегаем выставления одновременно и результата и исключения,
-  // поэтому не будим напрямую .task (она выставит результат из .status), вместо
-  // этого будим того кто её ждёт
-  auto who_waits = task.promise().who_waits;
-  if (who_waits)
-    who_waits.resume();
-  else
-    task.destroy();  // calls dctors on locals etc, so all correct
+  if (node.task)
+    node.task.promise().set_exception(std::move(e));
+  finish_request(node, reqerr_e::CANCELLED);
 }
 
 void h2connection::cancel_request(h2stream& node) noexcept {

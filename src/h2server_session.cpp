@@ -140,7 +140,11 @@ static dd::task<int> send_response(stream_ptr node, h2server_session& session) {
   node->status = (int)rsp.status;
   node->req = response_bro::torequest(std::move(rsp));
 
-  if (co_await session.response_written(*node))
+  bool written = co_await session.response_written(*node);
+  // канал ответа завершился исключением (finish_request_with_user_exception): оно уже лежит в promise
+  if ((co_await dd::this_coro::handle).promise().has_exception()) [[unlikely]]
+    co_return dd::rvo;
+  if (written)
     HTTP2_LOG_TRACE(session.logctx(), "response for stream {} successfully written", node->streamid);
   else
     HTTP2_LOG_TRACE(session.logctx(), "response for stream {} failed", node->streamid);
