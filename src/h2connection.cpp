@@ -269,6 +269,8 @@ void h2connection::settings_changed(h2frame newsettings, bool remote_is_client) 
   // encoder обновится на основании новых настроек когда писатель увидит `encodertablesizechangerequested`
   adjust_window_for_all_streams(before.initial_stream_window_size,
                                 remote_settings.initial_stream_window_size);
+  // могли измениться окна стримов и MAX_CONCURRENT_STREAMS
+  notify_blocked_writers();
   // then change all active streams window size
   send_settings_ack(this).start_and_detach();
 }
@@ -316,6 +318,8 @@ void h2connection::forget(h2stream& node) noexcept {
   }
   if (node.timers_hook.is_linked())
     erase_byref(timers, node);
+  // ждущий писатель этого стрима должен увидеть, что стрим завершён, а клиент - что освободился слот
+  notify_blocked_writers();
 }
 
 void h2connection::finish_request(h2stream& node, int status, bool send_rst) noexcept {
@@ -427,6 +431,7 @@ void h2connection::window_update(window_update_frame frame) {
                   frame.window_size_increment);
   if (frame.header.streamid == 0) {
     increment_window_size(receiver_window_size, int32_t(frame.window_size_increment), 0);
+    notify_blocked_writers();
     return;
   }
   h2stream* node = find_response_by_streamid(frame.header.streamid);
@@ -441,6 +446,7 @@ void h2connection::window_update(window_update_frame frame) {
   }
   increment_window_size(node->lr_streamlevel_windowsize, int32_t(frame.window_size_increment),
                         frame.header.streamid);
+  notify_blocked_writers();
 }
 
 bool h2connection::prepare_to_shutdown(reqerr_e::values_e reason) noexcept {
@@ -451,6 +457,7 @@ bool h2connection::prepare_to_shutdown(reqerr_e::values_e reason) noexcept {
 
   // set flag for anyone who will be resumed while shutting down this connection
   start_drop();
+  notify_blocked_writers();
 
   // prevents me to be destroyed while resuming writer/reader etc
   h2connection_ptr lock = this;

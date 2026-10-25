@@ -292,6 +292,9 @@ struct h2connection {
   // Если пир шлёт кадры, требующие ответа, но не читает ответы, они копятся бесконечно
   uint32_t pending_reply_frames = 0;
   uint32_t max_pending_reply_frames = uint32_t(-1);
+  // писатели, которые не могут продолжить до какого-то события: ждут окно flow control или (клиент) свободный
+  // слот MAX_CONCURRENT_STREAMS. См. `wait_writer_event`
+  dd::awaiters_queue<dd::task_node> blocked_writers;
 
   explicit h2connection(any_connection_t&& c, any_io_context_ref);
 
@@ -368,6 +371,38 @@ struct h2connection {
   // Note: worker may be still has no right to work (too many streams)
   [[nodiscard]] work_waiter wait_work() noexcept {
     return work_waiter(this);
+  }
+
+  struct writer_event_awaiter : dd::task_node {
+    h2connection* connection = nullptr;
+
+    static bool await_ready() noexcept {
+      return false;
+    }
+    void await_suspend(std::coroutine_handle<> h) noexcept {
+      task = h;
+      connection->blocked_writers.push(this);
+    }
+    static void await_resume() noexcept {
+    }
+  };
+
+  // ждёт события, после которого писателю стоит перепроверить своё условие: WINDOW_UPDATE, SETTINGS, стрим
+  // покинул соединение (завершён или отменён), разрыв соединения
+  // Note: условие может быть всё ещё не выполнено, ждать нужно в цикле
+  KELCORO_CO_AWAIT_REQUIRED writer_event_awaiter wait_writer_event() noexcept {
+    writer_event_awaiter a;
+    a.connection = this;
+    return a;
+  }
+
+  // будит всех ждущих в `wait_writer_event`. Через executor, так как вызывается из читателя посреди
+  // обработки кадра
+  void notify_blocked_writers() noexcept {
+    if (blocked_writers.empty()) [[likely]]
+      return;
+    dd::any_executor_ref exe{ioctx};
+    dd::attach_list(exe, blocked_writers.pop_all());
   }
 
   write_awaiter write(std::span<const byte_t> bytes, io_error_code& ec) {

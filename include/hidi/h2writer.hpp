@@ -12,11 +12,9 @@
 
 namespace hidi {
 
-using writer_sleepcb_t = move_only_fn<dd::task<void>(duration_t, io_error_code&)>;
 using writer_on_network_err_t = move_only_fn<void() noexcept>;
 
 struct writer_callbacks {
-  writer_sleepcb_t sleepcb;
   writer_on_network_err_t neterrcb;
   size_t refcount = 0;
 };
@@ -48,17 +46,16 @@ extern template dd::job write_stream_data<false>(stream_ptr node, h2connection_p
 // when server uses this function, pseudoheaders in requests are ignored and
 // 'status' from node used as required pseudoheader
 //
-// 'sleepcb' used when writer sleeps until its possible to write (control flow)
 // 'onnetworkerr' used when network error happens (before closing writer)
 // 'forcedisablehpack' forces writer to update HPACK dynamic table to zero size
 // when first request sent
 //
-// precondition: con && sleepcb  && onnetworkerr. Callbacks should not throw and
+// precondition: con && onnetworkerr. Callbacks should not throw and
 // behave as values, not references
-dd::job start_writer_for_client(h2connection_ptr con, writer_sleepcb_t, writer_on_network_err_t,
-                                bool forcedisablehpack, dd::gate::holder);
+dd::job start_writer_for_client(h2connection_ptr con, writer_on_network_err_t, bool forcedisablehpack,
+                                dd::gate::holder);
 
-dd::job start_writer_for_server(h2connection_ptr con, writer_sleepcb_t, writer_on_network_err_t,
-                                bool forcedisablehpack, dd::gate::holder);
+dd::job start_writer_for_server(h2connection_ptr con, writer_on_network_err_t, bool forcedisablehpack,
+                                dd::gate::holder);
 
 }  // namespace hidi

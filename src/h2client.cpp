@@ -174,10 +174,9 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
 
     start_reader_for(self, new_connection);
     // writer itself sets writer handle in connection
-    auto sleepcb = [self](duration_t d, io_error_code& ec) { return self->sleep(d, ec); };
     auto onnetworkerr = [self] { self->drop_connection(reqerr_e::NETWORK_ERR); };
-    start_writer_for_client(new_connection, std::move(sleepcb), std::move(onnetworkerr),
-                            self->get_options().force_disable_hpack, {});
+    start_writer_for_client(new_connection, std::move(onnetworkerr), self->get_options().force_disable_hpack,
+                            {});
 
     if (self->m_options.ping_interval != duration_t::max()) {
       new_connection->pingtimer.arm_periodic(self->m_options.ping_interval);
@@ -648,17 +647,12 @@ dd::task<int> h2client::send_connect_request(
   };
   node->makebody = std::move(makechan);
 
-  auto sleepcb = [this, node](duration_t d, io_error_code& ec) -> dd::task<void> {
-    if (node->finished() || !node->connection || node->connection->is_dropped())
-      throw stream_error(errc_e::STREAM_CLOSED, node->streamid, "stream already canceled");
-    return sleep(d, ec);
-  };
   auto neterrcb = [] { /*noop*/ };
 
   co_await dd::suspend_and_t([&](dd::task<int>::handle_type me) {
     node->task = me;
     // do not wait this stream, instead waiting RST_STREAM / END_STREAM flag
-    (void)write_stream_data</*IS_CLIENT=*/true>(node, con, new writer_callbacks(sleepcb, neterrcb));
+    (void)write_stream_data</*IS_CLIENT=*/true>(node, con, new writer_callbacks(neterrcb));
   });
   co_return status;
 }

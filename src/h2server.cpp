@@ -171,10 +171,6 @@ struct h2server::impl {
       erase_byref(sessions, session);
     };
 
-    auto sleepcb = [session_ptr](duration_t d, io_error_code& ec) -> dd::task<void> {
-      any_timer timer = session_ptr->server->ioctx().create_timer();
-      co_await net.sleep(timer, d, ec);
-    };
     auto request_terminate_inactive = [session_ptr, nm = this->logctx().name](bool canceled) {
       if (canceled)
         return;
@@ -218,7 +214,7 @@ struct h2server::impl {
     if (sessionsgate.is_closed())
       goto drop_session;
 
-    (void)start_writer_for_server(session.connection, sleepcb, request_terminate, options.force_disable_hpack,
+    (void)start_writer_for_server(session.connection, request_terminate, options.force_disable_hpack,
                                   session.connection_parts_gate.hold());
 
     session.connection->pingdeadlinetimer.set_callback(request_terminate_inactive);

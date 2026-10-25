@@ -150,7 +150,7 @@ template <bool Streaming>
 template <bool Streaming>
 static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, writer_callbacks_ptr cbs,
                                  io_error_code& ec) try {
-  assert(con && work && cbs && cbs->neterrcb && cbs->sleepcb);
+  assert(con && work && cbs && cbs->neterrcb);
   http_body_bytes& data = work->req.body.data;
 
   // uses guarantee about FRAME_LEN_BYTES before .data()
@@ -172,13 +172,7 @@ static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, writer_c
                       "stream wsz {}, con wsz: {}",
                       std::distance(in, data_end), con->remote_settings.max_frame_size,
                       work->lr_streamlevel_windowsize, con->receiver_window_size);
-      co_await cbs->sleepcb(std::chrono::nanoseconds(500), ec);
-      if (ec) {
-        HTTP2_LOG(con->logctx, ERROR, "something went wrong while sleeping, err: {}", ec.message());
-        if (ec == boost::asio::error::operation_aborted)
-          co_return;
-        // continue, ignore sleep errors
-      }
+      co_await con->wait_writer_event();
       framelen = 0;  // avoid in += framelen which is < 0
       continue;
     }
@@ -373,11 +367,11 @@ template dd::job write_stream_data<true>(stream_ptr node, h2connection_ptr con, 
 template dd::job write_stream_data<false>(stream_ptr node, h2connection_ptr con, writer_callbacks_ptr cbs);
 
 template <bool IS_CLIENT>
-dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_on_network_err_t neterrcb,
-                         bool forcedisablehpack, dd::gate::holder) {
-  assert(con && sleepcb && neterrcb);
+dd::job start_writer_for(h2connection_ptr con, writer_on_network_err_t neterrcb, bool forcedisablehpack,
+                         dd::gate::holder) {
+  assert(con && neterrcb);
   // make callbacks easy to copy into write_pending_frames for future use
-  writer_callbacks_ptr cbs = new writer_callbacks(std::move(sleepcb), std::move(neterrcb));
+  writer_callbacks_ptr cbs = new writer_callbacks(std::move(neterrcb));
 
   HTTP2_LOG_TRACE(con->logctx, "writer started");
   on_scope_exit {
@@ -402,7 +396,7 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
         while (con->concurrent_streams_now() >= con->remote_settings.max_concurrent_streams) [[unlikely]] {
           HTTP2_LOG_TRACE(con->logctx, "too many streams, waiting (max is {})",
                           con->remote_settings.max_concurrent_streams);
-          co_await yield_on_ioctx(con->ioctx);
+          co_await con->wait_writer_event();
           if (con->is_dropped())
             goto end;
         }
@@ -506,18 +500,16 @@ end:
   cbs->neterrcb();
 }
 
-dd::job start_writer_for_client(h2connection_ptr con, writer_sleepcb_t sleepcb,
-                                writer_on_network_err_t neterrcb, bool forcedisablehpack,
-                                dd::gate::holder guard) {
-  return start_writer_for</*IS_CLIENT=*/true>(std::move(con), std::move(sleepcb), std::move(neterrcb),
-                                              forcedisablehpack, std::move(guard));
+dd::job start_writer_for_client(h2connection_ptr con, writer_on_network_err_t neterrcb,
+                                bool forcedisablehpack, dd::gate::holder guard) {
+  return start_writer_for</*IS_CLIENT=*/true>(std::move(con), std::move(neterrcb), forcedisablehpack,
+                                              std::move(guard));
 }
 
-dd::job start_writer_for_server(h2connection_ptr con, writer_sleepcb_t sleepcb,
-                                writer_on_network_err_t neterrcb, bool forcedisablehpack,
-                                dd::gate::holder guard) {
-  return start_writer_for</*IS_CLIENT=*/false>(std::move(con), std::move(sleepcb), std::move(neterrcb),
-                                               forcedisablehpack, std::move(guard));
+dd::job start_writer_for_server(h2connection_ptr con, writer_on_network_err_t neterrcb,
+                                bool forcedisablehpack, dd::gate::holder guard) {
+  return start_writer_for</*IS_CLIENT=*/false>(std::move(con), std::move(neterrcb), forcedisablehpack,
+                                               std::move(guard));
 }
 
 }  // namespace hidi
