@@ -251,6 +251,7 @@ static dd::task<void> write_continuations(h2connection_ptr con, stream_id_t stre
 static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, http_headers_t headers,
                                      io_error_code& ec) {
   HTTP2_LOG_TRACE(con.logctx, "sendind trailers for stream {}", streamid);
+  HIDI_WAIT_WRITE(con);
   // reserve memory for frame header
   std::vector<byte_t> bytes(H2FHL);
   auto out = std::back_inserter(bytes);
@@ -269,7 +270,6 @@ static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, ht
   else
     fhdr.flags = flags::END_STREAM;
   fhdr.form(bytes.data());
-  HIDI_WAIT_WRITE(con);
   if (!one_frame) [[unlikely]]
     continuations_begin(con);
   on_scope_exit {
@@ -417,6 +417,14 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
 
       // send headers
 
+      HIDI_WAIT_WRITE(*con);
+      if (con->is_dropped())
+        goto end;
+      if constexpr (IS_CLIENT) {
+        // запрос могли отменить, пока писатель ждал
+        if (node->finished())
+          continue;
+      }
       headers.resize(H2FHL);  // reserve for frame header
 
       con->start_headers_block(*node, forcedisablehpack, headers);
@@ -440,7 +448,6 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
       if (con->logctx.should_log(log_level_e::TRACE)) [[unlikely]]
         trace_request_headers(*node, IS_CLIENT, con->logctx);
 #endif
-      HIDI_WAIT_WRITE(*con);
       if (!one_frame)
         continuations_begin(*con);
       co_await con->write(std::span(headers.data(), fhdr.length + H2FHL), ec);
