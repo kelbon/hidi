@@ -18,6 +18,10 @@ struct reusable_buffer {
     assert(m_resource);
   }
 
+  // владеет сырой памятью: копия освободила бы её дважды
+  reusable_buffer(reusable_buffer&&) = delete;
+  void operator=(reusable_buffer&&) = delete;
+
   ~reusable_buffer() {
     clear();
   }

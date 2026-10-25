@@ -21,7 +21,7 @@ std::span<byte_t, sizeof(T)> as_bytes(T& t) noexcept {
 template <typename T>
 std::span<const byte_t, sizeof(T)> as_bytes(const T& t) noexcept {
   static_assert(/*std::has_unique_object_representations_v<T> &&*/ std::is_trivially_copyable_v<T>);
-  return std::span<byte_t, sizeof(T)>(reinterpret_cast<const byte_t*>(std::addressof(t)), sizeof(T));
+  return std::span<const byte_t, sizeof(T)>(reinterpret_cast<const byte_t*>(std::addressof(t)), sizeof(T));
 }
 // this is for trivial types, not for spans
 template <typename T>
