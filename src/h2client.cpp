@@ -485,6 +485,12 @@ dd::task<int> h2client::send_request(on_header_fn_ptr on_header, on_data_part_fn
 
   stream_ptr node = con->new_stream_node(std::move(request), deadline, on_header, on_data_part, streamid);
 
+  // запрос можно отменить, уничтожив его корутину
+  on_scope_exit {
+    if (!node->finished())
+      con->cancel_request(*node);
+  };
+
   co_return co_await con->response_received(*node);
 }
 
@@ -519,6 +525,12 @@ dd::task<int> h2client::send_streaming_request(on_header_fn_ptr on_header, on_da
 
   stream_ptr node = con->new_streaming_stream_node(std::move(request), deadline, on_header, on_data_part,
                                                    streamid, std::move(makebody));
+
+  // запрос можно отменить, уничтожив его корутину
+  on_scope_exit {
+    if (!node->finished())
+      con->cancel_request(*node);
+  };
 
   co_return co_await con->response_received(*node);
 }
@@ -607,6 +619,12 @@ dd::task<int> h2client::send_connect_request(
   http_response rsp;
 
   stream_ptr node = con->new_stream_node(std::move(request), deadline, nullptr, nullptr, streamid);
+
+  // запрос можно отменить, уничтожив его корутину
+  on_scope_exit {
+    if (!node->finished())
+      con->cancel_request(*node);
+  };
 
   auto on_header = [&](std::string_view name, std::string_view value) {
     rsp.headers.emplace_back(std::string(name), std::string(value));

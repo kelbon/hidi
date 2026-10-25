@@ -415,6 +415,11 @@ struct h2connection {
   void finish_request_with_user_exception(h2stream& node, std::exception_ptr e) noexcept;
 
   // client side
+  // вызывается когда корутина запроса уничтожается до завершения стрима (отмена через .destroy())
+  // precondition: !node.finished()
+  void cancel_request(h2stream& node) noexcept;
+
+  // client side
   // returns false if no such stream
   [[nodiscard]] bool rststream_client(rst_stream rstframe);
 

@@ -359,6 +359,26 @@ void h2connection::finish_request_with_user_exception(h2stream& node, std::excep
     task.destroy();  // calls dctors on locals etc, so all correct
 }
 
+void h2connection::cancel_request(h2stream& node) noexcept {
+  assert(!node.finished());
+  HTTP2_LOG_TRACE(logctx, "stream {} canceled, request coroutine destroyed", node.streamid);
+  // HEADERS ещё не отправлены, для сервера стрим idle
+  bool sent = !node.requests_hook.is_linked();
+  forget(node);
+  // корутина уничтожается, её нельзя будить. Писатель увидит finished() и перестанет писать стрим
+  node.task = nullptr;
+  // колбеки могли жить в уничтоженной корутине
+  node.on_header_fn = nullptr;
+  if (node.is_connect_request() && node.on_data_part_fn) {
+    // данные CONNECT читает канал пользователя из memory_queue, будим его, чтобы он не ждал вечно
+    (*node.on_data_part_fn)({}, /*last chunk*/ true);
+  } else {
+    node.on_data_part_fn = nullptr;
+  }
+  if (sent)
+    send_rst_stream(this, node.streamid, errc_e::CANCEL).start_and_detach();
+}
+
 bool h2connection::rststream_client(rst_stream rstframe) {
   validate_rst_frame(rstframe);
   auto* node = find_response_by_streamid(rstframe.header.streamid);
