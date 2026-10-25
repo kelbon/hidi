@@ -170,13 +170,13 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
     self->m_connection->writer.handle = nullptr;
     assert(self->m_options.max_continuation_len_bytes <= MAX_CONTINUATION_LEN);
     self->m_connection->max_continuation_len = self->m_options.max_continuation_len_bytes;
+    self->m_connection->max_pending_reply_frames = self->m_options.max_pending_reply_frames;
 
     start_reader_for(self, new_connection);
     // writer itself sets writer handle in connection
-    auto sleepcb = [self](duration_t d, io_error_code& ec) { return self->sleep(d, ec); };
     auto onnetworkerr = [self] { self->drop_connection(reqerr_e::NETWORK_ERR); };
-    start_writer_for_client(new_connection, std::move(sleepcb), std::move(onnetworkerr),
-                            self->get_options().force_disable_hpack, {});
+    start_writer_for_client(new_connection, std::move(onnetworkerr), self->get_options().force_disable_hpack,
+                            {});
 
     if (self->m_options.ping_interval != duration_t::max()) {
       new_connection->pingtimer.arm_periodic(self->m_options.ping_interval);
@@ -345,6 +345,7 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
         }
         // do not require connection close
       }
+      con.validate_pending_reply_frames();
 
       // connection control flow (streamlevel in handle_frame)
       if (con.my_window_size < MAX_WINDOW_SIZE / 2)
@@ -379,15 +380,10 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
   goto drop_my_connection;
 protocol_error:
   reason = reqerr_e::PROTOCOL_ERR;
-  // To avoid ambiguity just send max_stream_id every time. Server did not
-  // initiate streams (SERVER_PUSH disabled) and nghttp2 for example answers
-  // with protocol error for some values
-  //
-  // Rfc:
-  // If a connection terminates without a GOAWAY frame,
-  // the last stream identifier is effectively the highest possible stream
-  // identifier
-  send_goaway(&con, MAX_STREAM_ID, goaway_info.errc, std::move(goaway_info.dbginfo)).start_and_detach();
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8-7
+  // last_stream_id относится к стримам, начатым получателем GOAWAY. Сервер стримы не начинает (push
+  // отключён), поэтому всегда 0
+  send_goaway(&con, 0, goaway_info.errc, std::move(goaway_info.dbginfo)).start_and_detach();
   goto drop_my_connection;
 network_error:
   reason = ec == boost::asio::error::operation_aborted ? reqerr_e::CANCELLED : reqerr_e::NETWORK_ERR;
@@ -488,6 +484,12 @@ dd::task<int> h2client::send_request(on_header_fn_ptr on_header, on_data_part_fn
 
   stream_ptr node = con->new_stream_node(std::move(request), deadline, on_header, on_data_part, streamid);
 
+  // запрос можно отменить, уничтожив его корутину
+  on_scope_exit {
+    if (!node->finished())
+      con->cancel_request(*node);
+  };
+
   co_return co_await con->response_received(*node);
 }
 
@@ -522,6 +524,12 @@ dd::task<int> h2client::send_streaming_request(on_header_fn_ptr on_header, on_da
 
   stream_ptr node = con->new_streaming_stream_node(std::move(request), deadline, on_header, on_data_part,
                                                    streamid, std::move(makebody));
+
+  // запрос можно отменить, уничтожив его корутину
+  on_scope_exit {
+    if (!node->finished())
+      con->cancel_request(*node);
+  };
 
   co_return co_await con->response_received(*node);
 }
@@ -611,6 +619,12 @@ dd::task<int> h2client::send_connect_request(
 
   stream_ptr node = con->new_stream_node(std::move(request), deadline, nullptr, nullptr, streamid);
 
+  // запрос можно отменить, уничтожив его корутину
+  on_scope_exit {
+    if (!node->finished())
+      con->cancel_request(*node);
+  };
+
   auto on_header = [&](std::string_view name, std::string_view value) {
     rsp.headers.emplace_back(std::string(name), std::string(value));
   };
@@ -623,6 +637,13 @@ dd::task<int> h2client::send_connect_request(
   int status = co_await con->response_received(*node);
   if (status < 0)
     throw_bad_status(status);
+  if (node->end_stream_received) [[unlikely]] {
+    // сервер завершил стрим ответом, туннеля нет. Отказ (не 2xx, например 407 от прокси) возвращается
+    // статусом, а 2xx без туннеля считается отменой запроса сервером
+    if (status >= 200 && status < 300)
+      throw_bad_status(reqerr_e::SERVER_CANCELLED_REQUEST);
+    co_return status;
+  }
 
   // server accepted connect request
   rsp.status = status;
@@ -633,18 +654,16 @@ dd::task<int> h2client::send_connect_request(
   };
   node->makebody = std::move(makechan);
 
-  auto sleepcb = [this, node](duration_t d, io_error_code& ec) -> dd::task<void> {
-    if (node->finished() || !node->connection || node->connection->is_dropped())
-      throw stream_error(errc_e::STREAM_CLOSED, node->streamid, "stream already canceled");
-    return sleep(d, ec);
-  };
   auto neterrcb = [] { /*noop*/ };
 
   co_await dd::suspend_and_t([&](dd::task<int>::handle_type me) {
     node->task = me;
     // do not wait this stream, instead waiting RST_STREAM / END_STREAM flag
-    (void)write_stream_data</*IS_CLIENT=*/true>(node, con, new writer_callbacks(sleepcb, neterrcb));
+    (void)write_stream_data</*IS_CLIENT=*/true>(node, con, new writer_callbacks(neterrcb));
   });
+  // исключение из канала пользователя уже лежит в promise (finish_request_with_user_exception)
+  if ((co_await dd::this_coro::handle).promise().has_exception()) [[unlikely]]
+    co_return dd::rvo;
   co_return status;
 }
 
@@ -658,12 +677,13 @@ dd::task<void> h2client::graceful_stop() {
 
   // waiting all requests finish
 
-  // prevent new requests on this connection
-  if (con && !con->graceful_shutdown_goaway_sended)
-    con->initiate_graceful_shutdown(con->last_initiated_streamid());
+  // Note: не initiate_graceful_shutdown, он отменяет запросы, ещё не отправленные писателем (например
+  // ждущие из-за MAX_CONCURRENT_STREAMS), а их нужно дождаться
+  if (con)
+    con->forbid_new_streams();
   // wait all requests done
   while (m_requestsInProgress != 0)
-    co_await sleep(std::chrono::nanoseconds(10), ec);
+    co_await sleep(std::chrono::milliseconds(1), ec);
   // request stop
   ++m_stopRequested;
   on_scope_exit {
@@ -680,7 +700,7 @@ dd::task<void> h2client::graceful_stop() {
       c->shutdown(reqerr_e::CANCELLED);
       break;
     }
-    co_await sleep(std::chrono::nanoseconds(1000), ec);
+    co_await sleep(std::chrono::milliseconds(1), ec);
   }
   co_await closer;
   assert(m_isConnecting == 0);

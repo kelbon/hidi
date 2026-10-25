@@ -39,7 +39,7 @@ struct asio_timer {
   }
 
   // arms timer after 'd' and repeats this each 'd'
-  // new arm will be after executing task
+  // period counts from the previous tick, not from the end of the callback
   // if timer was armed, its canceled first
   void arm_periodic(duration d);
 

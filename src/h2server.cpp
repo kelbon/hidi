@@ -109,6 +109,11 @@ struct h2server::impl {
         return std::string();
       }
     }();
+    // подряд идущие ошибки accept не должны превращать цикл в спинлок
+    // одиночные ошибки не замедляют приём
+    constexpr duration_t MAX_ACCEPT_BACKOFF = std::chrono::milliseconds(100);
+    constexpr duration_t MIN_ACCEPT_BACKOFF = std::chrono::microseconds(500);
+    duration_t backoff = MIN_ACCEPT_BACKOFF;
     // note: do not remove listener on scope exit
     while (!sessionsgate.is_closed()) {
       io_error_code ec;
@@ -125,9 +130,11 @@ struct h2server::impl {
         HTTP2_LOG(logctx(), ERROR, "accept failed on {}, err: {}", addrstr, ec.message());
         if (sessionsgate.is_closed())
           co_return;
-        else
-          continue;
+        backoff = std::min(backoff * 2, MAX_ACCEPT_BACKOFF);
+        co_await net.sleep(ioctx_ref(), backoff);
+        continue;
       }
+      backoff = MIN_ACCEPT_BACKOFF;
       HTTP2_LOG_TRACE(logctx(), "accepted connection");
       if (!sessionsgate.is_closed()) {
         if (!acceptcb)
@@ -171,10 +178,6 @@ struct h2server::impl {
       erase_byref(sessions, session);
     };
 
-    auto sleepcb = [session_ptr](duration_t d, io_error_code& ec) -> dd::task<void> {
-      any_timer timer = session_ptr->server->ioctx().create_timer();
-      co_await net.sleep(timer, d, ec);
-    };
     auto request_terminate_inactive = [session_ptr, nm = this->logctx().name](bool canceled) {
       if (canceled)
         return;
@@ -195,6 +198,12 @@ struct h2server::impl {
         session_ptr->connection->shutdown(reqerr_e::TIMEOUT);
       });
       timer.arm(options.connection_timeout);
+      {
+        io_error_code ec;
+        co_await session.connection->tcpcon->handshake(ec);
+        if (ec)
+          throw network_exception(ec);
+      }
       (void)co_await establish_http2_session_server(session.connection, options);
       session.established = true;
       timer.cancel();
@@ -212,7 +221,7 @@ struct h2server::impl {
     if (sessionsgate.is_closed())
       goto drop_session;
 
-    (void)start_writer_for_server(session.connection, sleepcb, request_terminate, options.force_disable_hpack,
+    (void)start_writer_for_server(session.connection, request_terminate, options.force_disable_hpack,
                                   session.connection_parts_gate.hold());
 
     session.connection->pingdeadlinetimer.set_callback(request_terminate_inactive);

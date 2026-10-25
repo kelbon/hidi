@@ -10,7 +10,6 @@
 #include "hidi/utils/deadline.hpp"
 #include "hidi/utils/unique_name.hpp"
 #include "hidi/utils/fn_ref.hpp"
-#include "hidi/utils/merged_segments.hpp"
 #include "hidi/asio/aio_context.hpp"
 
 #include <span>
@@ -280,14 +279,19 @@ struct h2connection {
   // invariant: has_value()
   any_timer timeout_warden_timer;
   bi::slist<h2stream, requests_member_hook_t, bi::constant_time_size<true>> free_nodes;
-  // all done stream ids stored here (before adding or search / 2 to map 1 3 5 to 0 1 2)
-  merged_segments closed_streams;
   log_context logctx;
   any_io_context_ref ioctx;
   // for supporting h2server_options::limit_requests_memory_usage_bytes
   size_t used_bytes = 0;
   size_t used_bytes_limit = size_t(-1);
   uint32_t max_continuation_len = uint32_t(-1);
+  // число ещё не записанных PING ACK, SETTINGS ACK, RST_STREAM, WINDOW_UPDATE
+  // Если пир шлёт кадры, требующие ответа, но не читает ответы, они копятся бесконечно
+  uint32_t pending_reply_frames = 0;
+  uint32_t max_pending_reply_frames = uint32_t(-1);
+  // писатели, которые не могут продолжить до какого-то события: ждут окно flow control или (клиент) свободный
+  // слот MAX_CONCURRENT_STREAMS. См. `wait_writer_event`
+  dd::awaiters_queue<dd::task_node> blocked_writers;
 
   explicit h2connection(any_connection_t&& c, any_io_context_ref);
 
@@ -303,12 +307,11 @@ struct h2connection {
       [[unlikely]];                                          \
   }
 
-  void mark_stream_closed(stream_id_t id) noexcept {
-    closed_streams.add_point(id / 2);
-  }
-
+  // precondition: стрима с этим id нет среди активных (requests / responses)
+  // Стрим, который уже начат и не активен, закрыт. Это относится и к id, пропущенным пиром: первое
+  // использование нового id неявно закрывает все idle стримы с меньшими id
   bool is_closed_stream(stream_id_t id) const noexcept {
-    return closed_streams.has_point(id / 2);
+    return !is_idle_stream(id);
   }
 
   // stream not yet started
@@ -366,6 +369,38 @@ struct h2connection {
     return work_waiter(this);
   }
 
+  struct writer_event_awaiter : dd::task_node {
+    h2connection* connection = nullptr;
+
+    static bool await_ready() noexcept {
+      return false;
+    }
+    void await_suspend(std::coroutine_handle<> h) noexcept {
+      task = h;
+      connection->blocked_writers.push(this);
+    }
+    static void await_resume() noexcept {
+    }
+  };
+
+  // ждёт события, после которого писателю стоит перепроверить своё условие: WINDOW_UPDATE, SETTINGS, стрим
+  // покинул соединение (завершён или отменён), разрыв соединения
+  // Note: условие может быть всё ещё не выполнено, ждать нужно в цикле
+  KELCORO_CO_AWAIT_REQUIRED writer_event_awaiter wait_writer_event() noexcept {
+    writer_event_awaiter a;
+    a.connection = this;
+    return a;
+  }
+
+  // будит всех ждущих в `wait_writer_event`. Через executor, так как вызывается из читателя посреди
+  // обработки кадра
+  void notify_blocked_writers() noexcept {
+    if (blocked_writers.empty()) [[likely]]
+      return;
+    dd::any_executor_ref exe{ioctx};
+    dd::attach_list(exe, blocked_writers.pop_all());
+  }
+
   write_awaiter write(std::span<const byte_t> bytes, io_error_code& ec) {
     return write_awaiter{tcpcon, ec, bytes};
   }
@@ -386,6 +421,12 @@ struct h2connection {
 
   void initiate_graceful_shutdown(stream_id_t laststreamid) noexcept;
 
+  // новые стримы на соединении больше не открываются, уже начатые (в том числе ещё не отправленные
+  // писателем) завершаются как обычно
+  void forbid_new_streams() noexcept {
+    laststartedstreamid = MAX_STREAM_ID;
+  }
+
   // when streamid is max, connection is not broken, but required to stop
   [[nodiscard]] bool is_done_completely() const noexcept {
     return is_out_of_streamids() && requests.empty() && responses.empty();
@@ -395,20 +436,29 @@ struct h2connection {
 
   // ALL streams must be finished by calling this function except when user
   // exception throwed from on_header/on_data_part callbacks
-  void finish_request(h2stream& node, int status) noexcept;
+  // `send_rst` == false запрещает RST_STREAM при отмене / таймауте
+  void finish_request(h2stream& node, int status, bool send_rst = true) noexcept;
 
-  // client side
-  // used only when user exception throwed from on_header/on_data_part callbacks
+  // used when user exception throwed from on_header/on_data_part callbacks
   // or if channel for streaming node throws
   // precondition: e != nullptr
   void finish_request_with_user_exception(h2stream& node, std::exception_ptr e) noexcept;
 
   // client side
+  // вызывается когда корутина запроса уничтожается до завершения стрима (отмена через .destroy())
+  // precondition: !node.finished()
+  void cancel_request(h2stream& node) noexcept;
+
+  // client side
   // returns false if no such stream
   [[nodiscard]] bool rststream_client(rst_stream rstframe);
 
+  // client side
   void finish_request_by_timeout(h2stream& node) noexcept {
-    finish_request(node, reqerr_e::TIMEOUT);
+    // запрос ещё в очереди писателя, HEADERS не отправлены и для сервера стрим idle. RST_STREAM на idle стрим
+    // - ошибка всего соединения https://www.rfc-editor.org/rfc/rfc9113.html#section-6.4-7
+    bool sent = !node.requests_hook.is_linked();
+    finish_request(node, reqerr_e::TIMEOUT, sent);
   }
 
   void finish_all_with_reason(reqerr_e::values_e reason);
@@ -476,19 +526,24 @@ struct h2connection {
   struct response_awaiter {
     h2connection* con = nullptr;
     h2stream* n = nullptr;
+    dd::task<int>::handle_type self = nullptr;
 
     static bool await_ready() noexcept {
       return false;
     }
 
     std::coroutine_handle<> await_suspend(dd::task<int>::handle_type h) noexcept {
+      self = h;
       n->task = h;
       if (con->writer.handle)  // if writer waits job now
         return std::exchange(con->writer.handle, nullptr);
       return std::noop_coroutine();
     }
 
-    [[nodiscard]] int await_resume() const noexcept {
+    [[nodiscard]] int await_resume() const {
+      // исключение из колбеков пользователя (finish_request_with_user_exception)
+      if (self.promise().has_exception()) [[unlikely]]
+        std::rethrow_exception(self.promise().take_exception());
       return n->status;
     }
   };
@@ -517,6 +572,15 @@ struct h2connection {
     if (is_idle_stream(r.header.streamid)) {
       throw protocol_error(errc_e::PROTOCOL_ERROR,
                            std::format("RST_STREAM frame on a idle stream {}", r.header.streamid));
+    }
+  }
+
+  // вызывается reader после обработки каждого кадра
+  void validate_pending_reply_frames() const {
+    if (pending_reply_frames > max_pending_reply_frames) [[unlikely]] {
+      throw protocol_error(
+          errc_e::ENHANCE_YOUR_CALM,
+          std::format("peer does not read replies, frames waiting to be written: {}", pending_reply_frames));
     }
   }
 

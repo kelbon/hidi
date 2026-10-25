@@ -398,6 +398,19 @@ void client_test_impl(std::string_view name, moko3::section_info* toplvl_section
     std::rethrow_exception(std::move(ex));
 }
 
+template <auto* Foo>
+void transport_test_impl(std::string_view name, moko3::section_info* section) {
+  asio::io_context rawio;
+  bool test_ended = false;
+  std::exception_ptr ex;
+  (void)run_test(name, Foo(rawio, section), test_ended, ex);
+  deadline_t deadline = deadline_after(moko3::get_testbox().test_timeout(name));
+  fuzzing::fuzzer fuz(moko3::get_testbox().randg());
+  fuz.run_until(deadline, test_ended, rawio);
+  if (ex)
+    std::rethrow_exception(std::move(ex));
+}
+
 #define UNIQUE_TEST_NAME LOGIC_GUARDS_CONCAT(_test, __LINE__, __LINE__)
 
 // after this macro expected function scope, which will use `server`, `addr`, `ioctx`
@@ -429,5 +442,14 @@ void client_test_impl(std::string_view name, moko3::section_info* toplvl_section
   }                                                                                             \
   ::dd::task<void> UNIQUE_TEST_NAME(::hidi::h2client& client, ::hidi::any_io_context_ref ioctx, \
                                     ::moko3::section_info* _section)
+
+// тест транспортного уровня (без HTTP/2). После макроса ожидается тело функции, возвращающей
+// dd::task<void>, ему доступен `rawio` (asio::io_context), на котором создаются any_io_context, сокеты и т.д.
+#define TRANSPORT_TEST(NAME)                                                                             \
+  ::dd::task<void> UNIQUE_TEST_NAME(::boost::asio::io_context& rawio, ::moko3::section_info* _section); \
+  TEST(NAME) {                                                                                           \
+    ::hidi::transport_test_impl<&UNIQUE_TEST_NAME>(NAME, _section);                                      \
+  }                                                                                                      \
+  ::dd::task<void> UNIQUE_TEST_NAME(::boost::asio::io_context& rawio, ::moko3::section_info* _section)
 
 }  // namespace hidi

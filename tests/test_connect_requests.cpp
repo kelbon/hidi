@@ -32,6 +32,8 @@ struct bistream_test_server : h2server {
       auto c = co_await q->next_chunk();
       co_yield c;
     }
+    // клиент завершил данные END_STREAM
+    REQUIRE(!q->aborted());
   }
 
   dd::task<std::pair<http_response, bistream_body_maker_t>> handle_request_stream(

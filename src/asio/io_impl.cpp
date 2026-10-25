@@ -70,6 +70,11 @@ static void rebind_executor(asio_connection& c, asio::io_context& new_ioctx) {
   ec = newsock.assign(p, rawsock, ec);
   if (ec)
     throw network_exception(ec);
+  // assign не знает, что сокет был неблокирующим. Без этого синхронный write_some в try_write при полном
+  // буфере сокета ждёт в poll и блокирует весь поток
+  ec = newsock.non_blocking(true, ec);
+  if (ec)
+    throw network_exception(ec);
   c.sock = std::move(newsock);
 }
 
@@ -85,7 +90,15 @@ static void rebind_executor(asio_tls_connection& c, asio::io_context& new_ioctx)
   ec = newsock.assign(p, rawsock, ec);
   if (ec)
     throw network_exception(ec);
-  c.sock.lowest_layer() = std::move(newsock);
+  ec = newsock.non_blocking(true, ec);
+  if (ec)
+    throw network_exception(ec);
+  // rebind делается до TLS handshake (см. connection_i::handshake), состояния TLS ещё нет, поэтому
+  // ssl::stream пересоздаётся целиком. Его внутренние таймеры (pending_read_ / pending_write_) создаются на
+  // executor потока и при замене только сокета остались бы на старом io_context: ожидание одной операции TLS
+  // другой (например чтение, которому нужно записать ответ на KeyUpdate, пока идёт запись) завершалось бы в
+  // чужом потоке
+  c.sock = asio::ssl::stream<asio::ip::tcp::socket>(std::move(newsock), c.sslctx->ctx);
 }
 
 template <typename Connection, typename Context>
@@ -135,7 +148,7 @@ static dd::job start_inner_writer_for(auto* self) {
 [[nodiscard]] static bool do_try_read(noexport::single_read_assumption& rd, std::span<byte_t> buf) noexcept {
   size_t avail = rd.readen_end - rd.readen_start;
   bool b = avail >= buf.size();
-  if (b) {
+  if (b && !buf.empty()) {
     memcpy(buf.data(), rd.readen_start, buf.size());
     rd.readen_start += buf.size();
   }
@@ -153,7 +166,9 @@ static dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& e
     if (ec) [[unlikely]]
       break;
   }
-  c.readdata.readen_end += readen - userbufsz;
+  // при ошибке может быть прочитано меньше userbufsz, тогда в readdata ничего не попало
+  if (readen > userbufsz)
+    c.readdata.readen_end += readen - userbufsz;
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
 
@@ -215,6 +230,11 @@ dd::task<void> do_shutdown(noexport::single_writer_guarantee& wd, auto& sock) {
   }
   // запрещает новые try_write/start_write
   wd.allow_write = false;
+  // если пир не читает, начатый async_write не завершится никогда, поэтому он отменяется.
+  // writer получит operation_aborted и сбросит остаток очереди
+  io_error_code ec;
+  ec = sock.cancel(ec);
+  (void)ec;
   // либо writer сейчас работает, либо уже done
   // (т.к. любой write бы его разбудил и он бы никогда не заснул пока не обработает всё)
   while (!wd.writer_done())
@@ -239,7 +259,16 @@ void asio_tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t
 }
 
 size_t asio_tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
-  return do_try_write(*this, buf, ec);
+  (void)buf;
+  if (!writedata.allow_write) [[unlikely]] {
+    ec = boost::asio::error::operation_aborted;
+    return 0;
+  }
+  // Синхронный ssl::stream::write_some на неблокирующем сокете нельзя использовать: если сокет заполнится
+  // посреди записи зашифрованных данных, asio выбросит их остаток (ssl::detail::io, case want_output),
+  // а вызывающему сообщит, что открытый текст записан. Поток TLS будет испорчен.
+  // Поэтому для TLS запись всегда асинхронная
+  return 0;
 }
 
 void asio_tls_connection::start_write(writer_node* n) {
@@ -248,6 +277,10 @@ void asio_tls_connection::start_write(writer_node* n) {
 
 dd::task<void> asio_tls_connection::shutdown() noexcept {
   return do_shutdown(writedata, sock.lowest_layer());
+}
+
+dd::task<void> asio_tls_connection::handshake(io_error_code& ec) {
+  co_await net.handshake(sock, asio::ssl::stream_base::server, ec);
 }
 
 asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
@@ -433,6 +466,13 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
   if (!self.client_sslctx)
     self.client_sslctx = make_ssl_context_for_client(self.options.additional_ssl_certificates).p;
   std::unique_ptr<asio_tls_connection> res(new asio_tls_connection(std::move(tcp_sock), self.client_sslctx));
+  // tcp_sock перемещён, теперь по таймауту нужно закрывать сокет внутри res
+  timer.set_callback([&](bool canceled) {
+    if (!canceled) {
+      timeoutflag = true;
+      close_tcp_sock(res->sock.lowest_layer());
+    }
+  });
   if (self.options.host_for_name_verification) {
     res->sock.set_verify_mode(ssl::verify_peer);
     res->sock.set_verify_callback(
@@ -442,6 +482,14 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
   }
   if (!self.options.is_primal_connection)
     SSL_set_mode(res->sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
+  // SNI, по RFC 6066 только для доменного имени, не для IP адреса
+  if (const std::string* host = ep.remote.fqdn()) {
+    io_error_code ipec;
+    (void)asio::ip::make_address(*host, ipec);
+    if (ipec && !SSL_set_tlsext_host_name(res->sock.native_handle(), host->c_str()))
+      throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
+  }
   co_await net.handshake(res->sock, ssl::stream_base::handshake_type::client, ec);
   if (timeoutflag)
     throw timeout_exception();
@@ -484,11 +532,8 @@ struct asio_tls_acceptor {
     co_await net.accept(a, socket, ec);
     if (ec)
       co_return nullptr;
-    std::unique_ptr<asio_tls_connection> tcpcon(new asio_tls_connection(std::move(socket), sslctx));
-    co_await net.handshake(tcpcon->sock, asio::ssl::stream_base::server, ec);
-    if (ec)
-      co_return nullptr;
-    co_return any_connection_t(std::move(tcpcon));
+    // TLS handshake делает сервер через connection_i::handshake
+    co_return any_connection_t(new asio_tls_connection(std::move(socket), sslctx));
   }
 
   void close() {

@@ -163,6 +163,9 @@ struct h2client {
   // if 'on_data_part' is nullptr, then DATA ignored
   // returns < 0 if error (reqerr_e), > 0 if 3-digit server response code
   // if client not connected yet, connects automatically
+  // Note: если соединение уже устанавливается для другого запроса, ожидание ограничено дедлайном
+  // того запроса, а не этого. Запрос не будет отправлен после своего дедлайна, но может завершиться
+  // по таймауту позже него (не позже, чем завершится установка соединения)
   // precondition: request.method is not CONNECT ( for connect use send_connect_request)
   dd::task<int> send_request(on_header_fn_ptr on_header, on_data_part_fn_ptr on_data_part, http_request,
                              deadline_t deadline);
@@ -219,6 +222,8 @@ struct h2client {
   // `makestream` will be invoked once with response and memory queue from which user can receive data
   // precondition: request.method == CONNECT && request.body.data.empty()
   // returns status of first response, < 0 if connection request was failed
+  // если сервер отказал ответом без тела (END_STREAM в HEADERS, статус не 2xx), `makestream` не вызывается и
+  // возвращается этот статус
   // if client not connected yet, connects automatically
   dd::task<int> send_connect_request(
       http_request request,

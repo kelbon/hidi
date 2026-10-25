@@ -56,6 +56,7 @@ static void generate_http2_connect_headers(const h2stream& node, hpack::encoder&
     // https://www.rfc-editor.org/rfc/rfc9113.html#name-the-connect-method
     // :path :scheme MUST be omitted, authority required
     assert(!req.authority.empty());  // must be setted, address for server TCP connection
+    encoder.encode_with_cache(hpack::static_table_t::authority, req.authority, out);
   }
   for (auto& h : req.headers)
     encoder.encode(h.name(), h.value(), out);
@@ -149,7 +150,7 @@ template <bool Streaming>
 template <bool Streaming>
 static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, writer_callbacks_ptr cbs,
                                  io_error_code& ec) try {
-  assert(con && work && cbs && cbs->neterrcb && cbs->sleepcb);
+  assert(con && work && cbs && cbs->neterrcb);
   http_body_bytes& data = work->req.body.data;
 
   // uses guarantee about FRAME_LEN_BYTES before .data()
@@ -171,13 +172,7 @@ static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, writer_c
                       "stream wsz {}, con wsz: {}",
                       std::distance(in, data_end), con->remote_settings.max_frame_size,
                       work->lr_streamlevel_windowsize, con->receiver_window_size);
-      co_await cbs->sleepcb(std::chrono::nanoseconds(500), ec);
-      if (ec) {
-        HTTP2_LOG(con->logctx, ERROR, "something went wrong while sleeping, err: {}", ec.message());
-        if (ec == boost::asio::error::operation_aborted)
-          co_return;
-        // continue, ignore sleep errors
-      }
+      co_await con->wait_writer_event();
       framelen = 0;  // avoid in += framelen which is < 0
       continue;
     }
@@ -250,6 +245,7 @@ static dd::task<void> write_continuations(h2connection_ptr con, stream_id_t stre
 static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, http_headers_t headers,
                                      io_error_code& ec) {
   HTTP2_LOG_TRACE(con.logctx, "sendind trailers for stream {}", streamid);
+  HIDI_WAIT_WRITE(con);
   // reserve memory for frame header
   std::vector<byte_t> bytes(H2FHL);
   auto out = std::back_inserter(bytes);
@@ -268,7 +264,6 @@ static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, ht
   else
     fhdr.flags = flags::END_STREAM;
   fhdr.form(bytes.data());
-  HIDI_WAIT_WRITE(con);
   if (!one_frame) [[unlikely]]
     continuations_begin(con);
   on_scope_exit {
@@ -372,11 +367,11 @@ template dd::job write_stream_data<true>(stream_ptr node, h2connection_ptr con, 
 template dd::job write_stream_data<false>(stream_ptr node, h2connection_ptr con, writer_callbacks_ptr cbs);
 
 template <bool IS_CLIENT>
-dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_on_network_err_t neterrcb,
-                         bool forcedisablehpack, dd::gate::holder) {
-  assert(con && sleepcb && neterrcb);
+dd::job start_writer_for(h2connection_ptr con, writer_on_network_err_t neterrcb, bool forcedisablehpack,
+                         dd::gate::holder) {
+  assert(con && neterrcb);
   // make callbacks easy to copy into write_pending_frames for future use
-  writer_callbacks_ptr cbs = new writer_callbacks(std::move(sleepcb), std::move(neterrcb));
+  writer_callbacks_ptr cbs = new writer_callbacks(std::move(neterrcb));
 
   HTTP2_LOG_TRACE(con->logctx, "writer started");
   on_scope_exit {
@@ -395,6 +390,20 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
     assert(!con->requests.empty());
 
     while (!con->requests.empty()) {
+      if constexpr (IS_CLIENT) {
+        // запрос ждёт слот, оставаясь в requests: так при таймауте он завершится без RST_STREAM (см.
+        // finish_request_by_timeout), а при разрыве соединения - в finish_all_with_reason
+        while (con->concurrent_streams_now() >= con->remote_settings.max_concurrent_streams) [[unlikely]] {
+          HTTP2_LOG_TRACE(con->logctx, "too many streams, waiting (max is {})",
+                          con->remote_settings.max_concurrent_streams);
+          co_await con->wait_writer_event();
+          if (con->is_dropped())
+            goto end;
+        }
+        // все ожидавшие запросы могли завершиться по таймауту
+        if (con->requests.empty())
+          break;
+      }
       stream_ptr node = &con->requests.front();
 
       con->requests.pop_front();
@@ -402,21 +411,14 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
 
       // send headers
 
+      HIDI_WAIT_WRITE(*con);
+      if (con->is_dropped())
+        goto end;
       if constexpr (IS_CLIENT) {
-        // node уже в responses (insert_response_node выше), то есть учтён в concurrent_streams_now()
-        while (con->concurrent_streams_now() > con->remote_settings.max_concurrent_streams) [[unlikely]] {
-          HTTP2_LOG_TRACE(con->logctx, "too many streams, waiting (max is {})",
-                          con->remote_settings.max_concurrent_streams);
-          co_await yield_on_ioctx(con->ioctx);
-          if (ec || con->is_dropped()) {
-            if (ec != boost::asio::error::operation_aborted)
-              con->finish_request(*node, reqerr_e::NETWORK_ERR);
-
-            goto end;
-          }
-        }
+        // запрос могли отменить, пока писатель ждал
+        if (node->finished())
+          continue;
       }
-
       headers.resize(H2FHL);  // reserve for frame header
 
       con->start_headers_block(*node, forcedisablehpack, headers);
@@ -440,7 +442,6 @@ dd::job start_writer_for(h2connection_ptr con, writer_sleepcb_t sleepcb, writer_
       if (con->logctx.should_log(log_level_e::TRACE)) [[unlikely]]
         trace_request_headers(*node, IS_CLIENT, con->logctx);
 #endif
-      HIDI_WAIT_WRITE(*con);
       if (!one_frame)
         continuations_begin(*con);
       co_await con->write(std::span(headers.data(), fhdr.length + H2FHL), ec);
@@ -499,18 +500,16 @@ end:
   cbs->neterrcb();
 }
 
-dd::job start_writer_for_client(h2connection_ptr con, writer_sleepcb_t sleepcb,
-                                writer_on_network_err_t neterrcb, bool forcedisablehpack,
-                                dd::gate::holder guard) {
-  return start_writer_for</*IS_CLIENT=*/true>(std::move(con), std::move(sleepcb), std::move(neterrcb),
-                                              forcedisablehpack, std::move(guard));
+dd::job start_writer_for_client(h2connection_ptr con, writer_on_network_err_t neterrcb,
+                                bool forcedisablehpack, dd::gate::holder guard) {
+  return start_writer_for</*IS_CLIENT=*/true>(std::move(con), std::move(neterrcb), forcedisablehpack,
+                                              std::move(guard));
 }
 
-dd::job start_writer_for_server(h2connection_ptr con, writer_sleepcb_t sleepcb,
-                                writer_on_network_err_t neterrcb, bool forcedisablehpack,
-                                dd::gate::holder guard) {
-  return start_writer_for</*IS_CLIENT=*/false>(std::move(con), std::move(sleepcb), std::move(neterrcb),
-                                               forcedisablehpack, std::move(guard));
+dd::job start_writer_for_server(h2connection_ptr con, writer_on_network_err_t neterrcb,
+                                bool forcedisablehpack, dd::gate::holder guard) {
+  return start_writer_for</*IS_CLIENT=*/false>(std::move(con), std::move(neterrcb), forcedisablehpack,
+                                               std::move(guard));
 }
 
 }  // namespace hidi

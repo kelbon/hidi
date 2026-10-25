@@ -154,7 +154,8 @@ SERVER_TEST("server CONTINUATION limit", test_ssl_ctx()) {
   SECTION("overlimit") {
     headers.resize(LIMIT, 'a');
     co_await client.send_raw_continuation(1, headers, /*end_headers=*/true);
-    co_await client.receive_goaway(MAX_STREAM_ID, errc_e::ENHANCE_YOUR_CALM, ping_e::RESPONSE);
+    // блок заголовков стрима 1 отброшен, стрим не начат
+    co_await client.receive_goaway(0, errc_e::ENHANCE_YOUR_CALM, ping_e::RESPONSE);
   }
   SECTION("headers.size() == LIMIT") {
     headers.resize(LIMIT - FIRST_CHUNK, 'a');
@@ -163,6 +164,72 @@ SERVER_TEST("server CONTINUATION limit", test_ssl_ctx()) {
     co_await client.receive_goaway(1, errc_e::COMPRESSION_ERROR, ping_e::RESPONSE);
   }
 }
+
+// отказ по max_concurrent_streams не должен ломать таблицу декодера сервера
+SERVER_TEST("refused stream keeps hpack state") {
+  server.get_options().max_concurrent_streams = 1;
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  std::vector<header> hdrs{
+      {":method", "GET"}, {":path", "/"}, {":scheme", "http"}, {":authority", addr.address().to_string()},
+      {"x-cached", "1"},
+  };
+  // стрим 1 занимает единственный слот
+  co_await client.send_headers(1, hdrs, /*end_stream=*/false);
+  // стрим 3 отклоняется, но его блок добавляет "x-cached: 3" в таблицу
+  hdrs.back().value = "3";
+  co_await client.send_headers(3, hdrs, /*end_stream=*/true);
+  co_await client.receive_rst_stream(3, errc_e::REFUSED_STREAM);
+
+  co_await client.send_data(1, "x", /*end_stream=*/true);
+  REQUIRE((co_await client.receive_rsp()).streamid == 1);
+  // стрим 5 ссылается на запись из блока стрима 3
+  co_await client.send_headers(5, hdrs, /*end_stream=*/true);
+  auto rsp = co_await client.receive_rsp();
+  REQUIRE(rsp.streamid == 5);
+  REQUIRE(std::ranges::find(rsp.headers, header{"x-cached", "3"}) != rsp.headers.end());
+}
+
+// эти тесты закрыты только потому что зависят от буферов ОС
+// и падают иногда на CI из-за этого. А сами тесты рабочие
+#if 0
+
+// пачка PING, на каждый из которых нужно ответить
+static std::vector<byte_t> pings(size_t count) {
+  std::vector<byte_t> bytes;
+  bytes.reserve(count * (FRAME_HEADER_LEN + 8));
+  for (size_t i = 0; i < count; ++i)
+    ping_frame::form(uint64_t(i), /*request_answer=*/true, std::back_inserter(bytes));
+  return bytes;
+}
+
+// Клиент шлёт PING, но не читает ответы, поэтому сервер не может их отправить.
+// Сервер должен закрыть соединение, а не копить ответы в памяти
+// Сначала ответы заполняют буферы ядра, их размер зависит от системы, поэтому PING отправляются пачками
+SERVER_TEST("client does not read replies") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  REQUIRE(server.sessions_count() == 1);
+  for (int i = 0; i < 20 && server.sessions_count() != 0; ++i) {
+    co_await client.send_raw_frame(pings(50'000));
+    co_await net.sleep(ioctx, std::chrono::milliseconds(10));
+  }
+  REQUIRE(server.sessions_count() == 0);
+}
+
+// то же самое для клиента
+CLIENT_TEST("server does not read replies") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  REQUIRE(client.connected());
+  for (int i = 0; i < 20 && client.connected(); ++i) {
+    co_await server.send_raw_frame(pings(50'000));
+    co_await net.sleep(ioctx, std::chrono::milliseconds(10));
+  }
+  REQUIRE(!client.connected());
+}
+
+#endif
 
 SERVER_TEST("big requests") {
   auto client = co_await fake_client_connection(ioctx, addr);

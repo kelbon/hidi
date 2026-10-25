@@ -76,6 +76,18 @@ client_ssl_context_ptr make_ssl_context_for_client(std::span<const std::filesyst
   return client_ssl_context_ptr{std::move(sslctx)};
 }
 
+// https://www.rfc-editor.org/rfc/rfc9113.html#section-3.2
+// выбирает h2, если клиент его предлагает. Иначе ALPN просто не согласуется, соединение не отклоняется
+static int select_h2(SSL*, const unsigned char** out, unsigned char* outlen, const unsigned char* in,
+                     unsigned int inlen, void*) {
+  static const unsigned char h2[] = {0x02, 'h', '2'};
+  unsigned char* selected = nullptr;
+  if (SSL_select_next_proto(&selected, outlen, h2, sizeof(h2), in, inlen) != OPENSSL_NPN_NEGOTIATED)
+    return SSL_TLSEXT_ERR_NOACK;
+  *out = selected;
+  return SSL_TLSEXT_ERR_OK;
+}
+
 server_ssl_context_ptr make_ssl_context_for_server(std::filesystem::path certificate,
                                                    std::filesystem::path server_private_key,
                                                    const log_context& logctx) {
@@ -99,6 +111,7 @@ server_ssl_context_ptr make_ssl_context_for_server(std::filesystem::path certifi
     throw network_exception("cannot load server private key file, path {}, err: {}",
                             server_private_key.string(), ec.message());
   }
+  SSL_CTX_set_alpn_select_cb(ctx->ctx.native_handle(), &select_h2, nullptr);
   return server_ssl_context_ptr{std::move(ctx)};
 }
 

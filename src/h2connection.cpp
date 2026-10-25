@@ -74,9 +74,8 @@ void h2stream::receive_trailers_headers(hpack::decoder& decoder, h2frame frame) 
   constexpr auto mask = flags::END_STREAM | flags::END_HEADERS;
   if (((frame.header.flags & mask) != mask))
     throw protocol_error(errc_e::STREAM_CLOSED, "trailers header without END_STREAM | END_HEADERS");
-  on_scope_exit {
-    end_stream_received = true;
-  };
+  // до колбеков: memory_queue по нему отличает END_STREAM от обрыва
+  end_stream_received = true;
   hpack::decode_headers_block(decoder, frame.data, [&](std::string_view name, std::string_view value) {
     HTTP2_LOG_TRACE(this->logctx(), "name: {}, value: {}", name, value);
     validate_trailer_header(name, frame.header.streamid);
@@ -100,6 +99,9 @@ void h2stream::receive_request_trailers(hpack::decoder& decoder, h2frame hdrs) {
   };
   bool memory_limit_exceeded = false;
   auto onheader = [&](std::string_view name, std::string_view value) {
+    // запрос bistream (answer_before_data) уже отдан пользователю, трейлеры клиента игнорируются
+    if (answered_before_data)
+      return;
     if (memory_limit_exceeded || !use_bytes(name.size() + value.size())) [[unlikely]] {
       // not throw, maintain dynamic table anyway
       memory_limit_exceeded = true;
@@ -149,9 +151,8 @@ void h2stream::receive_response_headers(hpack::decoder& decoder, h2frame frame) 
 void h2stream::receive_response_data(h2frame frame) {
   assert(frame.header.streamid == streamid);
   assert(frame.header.type == frame_e::DATA);
-  on_scope_exit {
-    end_stream_received = frame.header.flags & flags::END_STREAM;
-  };
+  // до колбека: memory_queue по нему отличает END_STREAM от обрыва
+  end_stream_received = frame.header.flags & flags::END_STREAM;
   decrease_window_size(rl_streamlevel_windowsize, int32_t(frame.header.length), logctx());
   if (rl_streamlevel_windowsize < MAX_WINDOW_SIZE / 2 && !(frame.header.flags & flags::END_STREAM))
     update_window_to_max(stream_ptr(this), connection).start_and_detach();
@@ -209,6 +210,8 @@ void h2stream::receive_request_data(h2frame frame) {
     }
     req.body.data.insert(req.body.data.end(), frame.data.begin(), frame.data.end());
   } else {
+    // до колбека: memory_queue по нему отличает END_STREAM от обрыва
+    end_stream_received = frame.header.flags & flags::END_STREAM;
     (*on_data_part_fn)(frame.data, frame.header.flags& flags::END_STREAM);
   }
 }
@@ -243,6 +246,11 @@ void h2connection::settings_changed(h2frame newsettings, bool remote_is_client) 
     // только после подтверждения настроек я действительно могу перейти на свои настройки
     // ведь до этого клиент/сервер мог посылать запросы/ответы по старому размеру динамической таблицы
     decoder.dyntab.set_user_protocol_max_size(local_settings.header_table_size);
+    // RFC 7541 неоднозначен в том, обязан ли кодировщик пира сообщать об увеличении таблицы. nghttp2 считает,
+    // что не обязан, и сразу увеличивает таблицу декодера. Если таблица декодера больше таблицы кодировщика,
+    // индексы не расходятся, поэтому увеличивать безопасно
+    if (local_settings.header_table_size > decoder.dyntab.max_size())
+      decoder.dyntab.update_size(local_settings.header_table_size);
     return;
   }
   settings_t before = remote_settings;
@@ -264,6 +272,8 @@ void h2connection::settings_changed(h2frame newsettings, bool remote_is_client) 
   // encoder обновится на основании новых настроек когда писатель увидит `encodertablesizechangerequested`
   adjust_window_for_all_streams(before.initial_stream_window_size,
                                 remote_settings.initial_stream_window_size);
+  // могли измениться окна стримов и MAX_CONCURRENT_STREAMS
+  notify_blocked_writers();
   // then change all active streams window size
   send_settings_ack(this).start_and_detach();
 }
@@ -274,11 +284,13 @@ void h2connection::server_settings_changed(h2frame newsettings) {
 
 void h2connection::server_requests_graceful_shutdown(goaway_frame f) {
   HTTP2_LOG_TRACE(logctx, "graceful shutdown initiated: last stream id: {}", f.last_streamid);
-  // if we did not initiate this graceful shutdown
-  if (!graceful_shutdown_goaway_sended) {
-    initiate_graceful_shutdown(f.last_streamid);
-    graceful_shutdown_goaway_sended = true;
-  }
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8-14
+  // Сервер может прислать несколько GOAWAY подряд: сначала с last_stream_id == MAX_STREAM_ID как
+  // предупреждение, затем с реальным значением. Каждый обрабатывается, потому что стримы, которые сервер не
+  // обработает (id > last_stream_id), нужно завершить сразу, чтобы запрос можно было повторить
+  // Также это нужно когда graceful shutdown начал сам клиент (graceful_stop)
+  initiate_graceful_shutdown(f.last_streamid);
+  graceful_shutdown_goaway_sended = true;
   // do not drop connection, graceful_stop will do it or reader (its out of streams)
 }
 
@@ -290,7 +302,7 @@ void h2connection::initiate_graceful_shutdown(stream_id_t laststreamid) noexcept
   // So, connection will work until all done and create new connection for new
   // streams. we will do all what requested, > last stream id will be ignored, <
   // last stream id will be handled
-  laststartedstreamid = MAX_STREAM_ID;
+  forbid_new_streams();
   for (auto b = responses.begin(); b != responses.end();) {
     auto n = std::next(b);
     if (b->streamid > laststreamid)
@@ -309,9 +321,11 @@ void h2connection::forget(h2stream& node) noexcept {
   }
   if (node.timers_hook.is_linked())
     erase_byref(timers, node);
+  // ждущий писатель этого стрима должен увидеть, что стрим завершён, а клиент - что освободился слот
+  notify_blocked_writers();
 }
 
-void h2connection::finish_request(h2stream& node, int status) noexcept {
+void h2connection::finish_request(h2stream& node, int status, bool send_rst) noexcept {
   forget(node);
   if (!node.task)
     return;
@@ -325,7 +339,11 @@ void h2connection::finish_request(h2stream& node, int status) noexcept {
   node.status = status;
   stream_ptr p = &node;  // hold node
   auto t = std::exchange(node.task, nullptr);
-  if (status == reqerr_e::CANCELLED || status == reqerr_e::TIMEOUT) {
+  if (node.is_connect_request() && node.on_data_part_fn) {
+    // канал CONNECT читает данные из memory_queue и иначе ждал бы их вечно
+    (*node.on_data_part_fn)({}, /*last chunk*/ true);
+  }
+  if (send_rst && (status == reqerr_e::CANCELLED || status == reqerr_e::TIMEOUT)) {
     // ignore possible bad alloc for coroutine
     send_rst_stream(this, node.streamid, errc_e::CANCEL).start_and_detach();
   }
@@ -333,20 +351,29 @@ void h2connection::finish_request(h2stream& node, int status) noexcept {
 }
 
 void h2connection::finish_request_with_user_exception(h2stream& node, std::exception_ptr e) noexcept {
+  if (node.task)
+    node.task.promise().set_exception(std::move(e));
+  finish_request(node, reqerr_e::CANCELLED);
+}
+
+void h2connection::cancel_request(h2stream& node) noexcept {
+  assert(!node.finished());
+  HTTP2_LOG_TRACE(logctx, "stream {} canceled, request coroutine destroyed", node.streamid);
+  // HEADERS ещё не отправлены, для сервера стрим idle
+  bool sent = !node.requests_hook.is_linked();
   forget(node);
-  if (!node.task)
-    return;
-  HTTP2_LOG_TRACE(logctx, "stream {} finished with user exception", node.streamid);
-  send_rst_stream(this, node.streamid, errc_e::CANCEL).start_and_detach();
-  node.task.promise().set_exception(std::move(e));
-  // Note: избегаем выставления одновременно и результата и исключения,
-  // поэтому не будим напрямую .task (она выставит результат из .status), вместо
-  // этого будим того кто её ждёт
-  auto who_waits = node.task.promise().who_waits;
-  if (who_waits)
-    who_waits.resume();
-  else
-    node.task.destroy();  // calls dctors on locals etc, so all correct
+  // корутина уничтожается, её нельзя будить. Писатель увидит finished() и перестанет писать стрим
+  node.task = nullptr;
+  // колбеки могли жить в уничтоженной корутине
+  node.on_header_fn = nullptr;
+  if (node.is_connect_request() && node.on_data_part_fn) {
+    // данные CONNECT читает канал пользователя из memory_queue, будим его, чтобы он не ждал вечно
+    (*node.on_data_part_fn)({}, /*last chunk*/ true);
+  } else {
+    node.on_data_part_fn = nullptr;
+  }
+  if (sent)
+    send_rst_stream(this, node.streamid, errc_e::CANCEL).start_and_detach();
 }
 
 bool h2connection::rststream_client(rst_stream rstframe) {
@@ -397,6 +424,7 @@ void h2connection::window_update(window_update_frame frame) {
                   frame.window_size_increment);
   if (frame.header.streamid == 0) {
     increment_window_size(receiver_window_size, int32_t(frame.window_size_increment), 0);
+    notify_blocked_writers();
     return;
   }
   h2stream* node = find_response_by_streamid(frame.header.streamid);
@@ -411,6 +439,7 @@ void h2connection::window_update(window_update_frame frame) {
   }
   increment_window_size(node->lr_streamlevel_windowsize, int32_t(frame.window_size_increment),
                         frame.header.streamid);
+  notify_blocked_writers();
 }
 
 bool h2connection::prepare_to_shutdown(reqerr_e::values_e reason) noexcept {
@@ -421,6 +450,7 @@ bool h2connection::prepare_to_shutdown(reqerr_e::values_e reason) noexcept {
 
   // set flag for anyone who will be resumed while shutting down this connection
   start_drop();
+  notify_blocked_writers();
 
   // prevents me to be destroyed while resuming writer/reader etc
   h2connection_ptr lock = this;
@@ -505,7 +535,6 @@ stream_ptr h2connection::new_streaming_stream_node(http_request&& request, deadl
 void h2connection::return_node(h2stream* ptr) noexcept {
   assert(ptr && ptr->connection);
   forget(*ptr);
-  ptr->connection->mark_stream_closed(ptr->streamid);
   ptr->req = {};
   ptr->makebody.reset();
   // using always server settings, client creates requests, server controls
@@ -543,19 +572,21 @@ void h2connection::ignore_frame(h2frame frame) {
   // Note: sending frame for closed stream is only stream error, not protocol
   // because its possible that stream was canceled due timeout and then frame received
   switch (frame.header.type) {
-    case HEADERS:
+    case HEADERS: {
+      // до сдвига laststartedstreamid
+      bool closed = is_closed_stream(frame.header.streamid);
       // even if we ignoring frame, stream is done
       laststartedstreamid = std::max(laststartedstreamid, frame.header.streamid);
       // decode before all to ensure decoder will be in correct state
       // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8-19
       hpack::ignore_headers_block(decoder, frame.data);
 
-      if (is_closed_stream(frame.header.streamid)) {
+      if (closed) {
         throw stream_error(errc_e::STREAM_CLOSED, frame.header.streamid,
                            "HEADERS frame sent for closed stream");
       }
-      mark_stream_closed(frame.header.streamid);
       return;
+    }
     case DATA:
       // NOTE: not using data.size(), since padding should be counted as received
       // octets
@@ -704,9 +735,8 @@ void h2connection::client_receive_headers(h2frame frame) {
     return;
   }
   // ignore interim responses
-  if (node->is_connect_request() && !(node->status > 99 && node->status < 200)) [[unlikely]] {
-    if (node->end_stream_received)
-      return finish_request(*node, reqerr_e::SERVER_CANCELLED_REQUEST);
+  if (node->is_connect_request() && !node->end_stream_received && !(node->status > 99 && node->status < 200))
+      [[unlikely]] {
     assert(node->task);
     std::exchange(node->task, nullptr).resume();
     return;

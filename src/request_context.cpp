@@ -31,6 +31,7 @@ dd::task<void> request_context::send_interim_response(int status, http_headers_t
   if (!node->connection)
     co_return;
   HTTP2_LOG_TRACE(node->connection->logctx, "sending interim response with status {}", status);
+  HIDI_WAIT_WRITE(*node->connection);
   bytes_t bytes(FRAME_HEADER_LEN);
   node->connection->start_headers_block(*node, /*force_disable_hpack=(unknown here)*/ false, bytes);
   auto out = std::back_inserter(bytes);
@@ -46,7 +47,6 @@ dd::task<void> request_context::send_interim_response(int status, http_headers_t
   hdr.type = frame_e::HEADERS;
   hdr.flags = flags::END_HEADERS;
   hdr.form(bytes.data());
-  HIDI_WAIT_WRITE(*node->connection);
   io_error_code ec;
   co_await node->connection->write(bytes, ec);
   if (ec) {

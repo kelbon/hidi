@@ -71,6 +71,7 @@ h2server_session::h2server_session(h2connection_ptr con, h2server_options opts, 
   options.max_receive_frame_size = std::min(FRAME_LEN_MAX, options.max_receive_frame_size);
   options.max_continuation_len_bytes = std::min(options.max_continuation_len_bytes, MAX_CONTINUATION_LEN);
   connection->max_continuation_len = options.max_continuation_len_bytes;
+  connection->max_pending_reply_frames = options.max_pending_reply_frames;
 }
 
 h2server_session::~h2server_session() {
@@ -139,7 +140,11 @@ static dd::task<int> send_response(stream_ptr node, h2server_session& session) {
   node->status = (int)rsp.status;
   node->req = response_bro::torequest(std::move(rsp));
 
-  if (co_await session.response_written(*node))
+  bool written = co_await session.response_written(*node);
+  // канал ответа завершился исключением (finish_request_with_user_exception): оно уже лежит в promise
+  if ((co_await dd::this_coro::handle).promise().has_exception()) [[unlikely]]
+    co_return dd::rvo;
+  if (written)
     HTTP2_LOG_TRACE(session.logctx(), "response for stream {} successfully written", node->streamid);
   else
     HTTP2_LOG_TRACE(session.logctx(), "response for stream {} failed", node->streamid);
@@ -300,13 +305,12 @@ void h2server_session::start_request_assemble(const h2frame& frame, h2stream* ex
   // Note: before making a decision about a stream, to keep in mind the client's desire to create such stream
   connection->laststartedstreamid = frame.header.streamid;
 
-  if (connection->is_closed_stream(frame.header.streamid)) {
-    throw protocol_error(errc_e::STREAM_CLOSED,
-                         std::format("stream already closed, but received HEADERS frame. Stream id: {}",
-                                     frame.header.streamid));
-  } else if (requests_left_approx() >= connection->local_settings.max_concurrent_streams) {
+  if (requests_left_approx() >= connection->local_settings.max_concurrent_streams) {
     size_t exactreq = requests_left_exactly();
     if (exactreq >= connection->local_settings.max_concurrent_streams) {
+      // не ignore_frame: id уже учтён в laststartedstreamid и стрим выглядел бы закрытым (STREAM_CLOSED
+      // вместо REFUSED_STREAM)
+      hpack::ignore_headers_block(connection->decoder, frame.data);
       throw stream_error(errc_e::REFUSED_STREAM, frame.header.streamid,
                          std::format("refused due max concurrent streams exceeded, max count: {}, actual: {}",
                                      connection->local_settings.max_concurrent_streams, exactreq));
