@@ -298,6 +298,9 @@ void h2server_session::start_request_assemble(const h2frame& frame, h2stream* ex
                     frame.header.streamid, connection->laststartedstreamid));
   }
 
+  stream_id_t first_skipped = connection->laststartedstreamid == 0 ? 1 : connection->laststartedstreamid + 2;
+  if (first_skipped < frame.header.streamid)
+    connection->mark_streams_closed(first_skipped, frame.header.streamid - 2);
   // Note: before making a decision about a stream, to keep in mind the client's desire to create such stream
   connection->laststartedstreamid = frame.header.streamid;
 

@@ -314,6 +314,11 @@ struct h2connection {
     closed_streams.add_point(id / 2);
   }
 
+  // precondition: first <= last
+  void mark_streams_closed(stream_id_t first, stream_id_t last) {
+    closed_streams.add_segment(first / 2, last / 2);
+  }
+
   bool is_closed_stream(stream_id_t id) const noexcept {
     return closed_streams.has_point(id / 2);
   }

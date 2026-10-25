@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <vector>
 #include <cstdint>
 #include <cassert>
@@ -70,6 +71,22 @@ struct merged_segments {
       // add segment [P, P]
       segments.emplace_back(point, point);
     }
+  }
+
+  // добавляет все точки [start, end], сливаясь с пересекающимися и соседними отрезками
+  void add_segment(intmax_t start, intmax_t end) {
+    assert(start <= end);
+    for (size_t i = 0; i < segments.size();) {
+      segment& s = segments[i];
+      if (s.end + 1 >= start && s.start <= end + 1) {
+        start = std::min(start, s.start);
+        end = std::max(end, s.end);
+        erase_segment(s);  // на место i встаёт последний отрезок
+      } else {
+        ++i;
+      }
+    }
+    segments.emplace_back(start, end);
   }
 
   bool has_point(intmax_t point) const noexcept {

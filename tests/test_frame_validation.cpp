@@ -83,5 +83,22 @@ SERVER_TEST("GOAWAY debug info is truncated") {
   }
 }
 
+// https://www.rfc-editor.org/rfc/rfc9113.html#section-5.1.1
+// Новый стрим неявно закрывает пропущенные клиентом id, DATA для них - DATA для закрытого стрима
+SERVER_TEST("stream ids skipped by client are closed") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  std::vector<header> hdrs{
+      {":method", "GET"}, {":path", "/"}, {":scheme", "http"}, {":authority", addr.address().to_string()}};
+  co_await client.send_req(1, hdrs);
+  REQUIRE((co_await client.receive_rsp()).streamid == 1);
+  // id 3 пропущен
+  co_await client.send_req(5, hdrs);
+  REQUIRE((co_await client.receive_rsp()).streamid == 5);
+
+  co_await client.send_data(3, "data", /*end_stream=*/true);
+  co_await client.receive_rst_stream(3, errc_e::STREAM_CLOSED);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

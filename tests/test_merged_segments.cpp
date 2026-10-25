@@ -64,5 +64,23 @@ int main() {
 
   error_if(ms.segments_count() != 1);
 
+  // add_segment сливается с пересекающимися и соседними отрезками
+  {
+    hidi::merged_segments s;
+    s.add_point(0);
+    s.add_point(10);
+    s.add_point(20);
+    s.add_segment(2, 8);
+    error_if(s.segments_count() != 4);
+    error_if(s.has_point(1) || !s.has_point(2) || !s.has_point(8) || s.has_point(9));
+    s.add_segment(1, 9);  // соединяет [0], [2, 8], [10]
+    error_if(s.segments_count() != 2);
+    s.add_segment(11, 19);
+    error_if(s.segments_count() != 1);
+    for (int i = 0; i <= 20; ++i)
+      error_if(!s.has_point(i));
+    error_if(s.has_point(-1) || s.has_point(21));
+  }
+
   return 0;
 }
