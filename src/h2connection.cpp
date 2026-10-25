@@ -735,9 +735,8 @@ void h2connection::client_receive_headers(h2frame frame) {
     return;
   }
   // ignore interim responses
-  if (node->is_connect_request() && !(node->status > 99 && node->status < 200)) [[unlikely]] {
-    if (node->end_stream_received)
-      return finish_request(*node, reqerr_e::SERVER_CANCELLED_REQUEST);
+  if (node->is_connect_request() && !node->end_stream_received && !(node->status > 99 && node->status < 200))
+      [[unlikely]] {
     assert(node->task);
     std::exchange(node->task, nullptr).resume();
     return;

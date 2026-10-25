@@ -249,6 +249,34 @@ CLIENT_TEST("CONNECT request contains :authority") {
   REQUIRE(r.find_hdr(":scheme").empty());
 }
 
+// Ответ на CONNECT с END_STREAM в HEADERS означает, что туннеля нет. Отказ (например 407 от прокси)
+// возвращается статусом, а не теряется за ошибкой отмены
+CLIENT_TEST("CONNECT rejected without body returns status") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  auto makestream = [](http_response, memory_queue_ptr, request_context) -> streaming_body_t { co_return; };
+  auto h =
+      client
+          .send_connect_request(make_request(client, http_method_e::CONNECT), makestream, deadline_after(10s))
+          .start_and_detach(true);
+  on_scope_exit {
+    h.destroy();
+  };
+  for (;;) {
+    h2test_frame f = co_await server.receive_frame(deadline_after(5s));
+    if (f.hdr.type != frame_e::HEADERS)
+      continue;
+    hpack::ignore_headers_block(server.get_inner_connection()->decoder, f.data);
+    break;
+  }
+  std::vector<header> rejected{{":status", "407"}, {"proxy-authenticate", "Basic"}};
+  co_await server.send_headers(1, rejected, /*endstream=*/true);
+  co_await wait_until([&] { return h.done(); }, ioctx);
+  REQUIRE(h.promise().result_or_rethrow() == 407);
+  // туннель не начинается, по завершённому стриму ничего не отправляется
+  co_await server.sync();
+}
+
 // Исключение из on_header завершает задачу запроса, как обычное исключение: задача доходит до конца при
 // любом способе запуска, а клиент не считает запрос активным
 CLIENT_TEST("user exception completes request task") {

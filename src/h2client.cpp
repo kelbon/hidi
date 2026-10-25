@@ -637,6 +637,13 @@ dd::task<int> h2client::send_connect_request(
   int status = co_await con->response_received(*node);
   if (status < 0)
     throw_bad_status(status);
+  if (node->end_stream_received) [[unlikely]] {
+    // сервер завершил стрим ответом, туннеля нет. Отказ (не 2xx, например 407 от прокси) возвращается
+    // статусом, а 2xx без туннеля считается отменой запроса сервером
+    if (status >= 200 && status < 300)
+      throw_bad_status(reqerr_e::SERVER_CANCELLED_REQUEST);
+    co_return status;
+  }
 
   // server accepted connect request
   rsp.status = status;

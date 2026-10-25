@@ -222,6 +222,8 @@ struct h2client {
   // `makestream` will be invoked once with response and memory queue from which user can receive data
   // precondition: request.method == CONNECT && request.body.data.empty()
   // returns status of first response, < 0 if connection request was failed
+  // если сервер отказал ответом без тела (END_STREAM в HEADERS, статус не 2xx), `makestream` не вызывается и
+  // возвращается этот статус
   // if client not connected yet, connects automatically
   dd::task<int> send_connect_request(
       http_request request,
