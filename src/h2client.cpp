@@ -673,7 +673,7 @@ dd::task<void> h2client::graceful_stop() {
     con->forbid_new_streams();
   // wait all requests done
   while (m_requestsInProgress != 0)
-    co_await sleep(std::chrono::nanoseconds(10), ec);
+    co_await sleep(std::chrono::milliseconds(1), ec);
   // request stop
   ++m_stopRequested;
   on_scope_exit {
@@ -690,7 +690,7 @@ dd::task<void> h2client::graceful_stop() {
       c->shutdown(reqerr_e::CANCELLED);
       break;
     }
-    co_await sleep(std::chrono::nanoseconds(1000), ec);
+    co_await sleep(std::chrono::milliseconds(1), ec);
   }
   co_await closer;
   assert(m_isConnecting == 0);
