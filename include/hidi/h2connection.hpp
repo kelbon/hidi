@@ -390,6 +390,12 @@ struct h2connection {
 
   void initiate_graceful_shutdown(stream_id_t laststreamid) noexcept;
 
+  // новые стримы на соединении больше не открываются, уже начатые (в том числе ещё не отправленные
+  // писателем) завершаются как обычно
+  void forbid_new_streams() noexcept {
+    laststartedstreamid = MAX_STREAM_ID;
+  }
+
   // when streamid is max, connection is not broken, but required to stop
   [[nodiscard]] bool is_done_completely() const noexcept {
     return is_out_of_streamids() && requests.empty() && responses.empty();

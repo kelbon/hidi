@@ -297,7 +297,7 @@ void h2connection::initiate_graceful_shutdown(stream_id_t laststreamid) noexcept
   // So, connection will work until all done and create new connection for new
   // streams. we will do all what requested, > last stream id will be ignored, <
   // last stream id will be handled
-  laststartedstreamid = MAX_STREAM_ID;
+  forbid_new_streams();
   for (auto b = responses.begin(); b != responses.end();) {
     auto n = std::next(b);
     if (b->streamid > laststreamid)

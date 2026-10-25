@@ -131,5 +131,48 @@ CLIENT_TEST("second GOAWAY cancels streams above last_streamid") {
   REQUIRE(canceled);
 }
 
+// graceful_stop ждёт все начатые запросы, в том числе ещё не отправленные из-за MAX_CONCURRENT_STREAMS
+CLIENT_TEST("graceful_stop waits queued requests") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  server.set_max_concurrent_streams(1);
+  co_await emulate_server_connection(server);
+
+  auto make_request = [&](std::string path) {
+    http_request req;
+    req.method = http_method_e::GET;
+    req.path = std::move(path);
+    req.scheme = scheme_e::HTTP;
+    req.authority = client.get_remote().to_string();
+    return req;
+  };
+  using handle_t =
+      decltype(client.send_request(make_request("/"), deadline_after(10s)).start_and_detach(true));
+  std::vector<handle_t> handles;
+  on_scope_exit {
+    for (handle_t h : handles)
+      h.destroy();
+  };
+  for (int i = 0; i < 3; ++i)
+    handles.push_back(client.send_request(make_request("/"), deadline_after(10s)).start_and_detach(true));
+  REQUIRE((co_await server.receive_req()).streamid == 1);
+
+  auto stop = client.graceful_stop().start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    stop.destroy();
+  };
+  std::vector<header> ok{{":status", "200"}};
+  co_await server.send_rsp(1, ok);
+  REQUIRE((co_await server.receive_req()).streamid == 3);
+  co_await server.send_rsp(3, ok);
+  REQUIRE((co_await server.receive_req()).streamid == 5);
+  co_await server.send_rsp(5, ok);
+
+  co_await wait_until([&] { return stop.done(); }, ioctx);
+  for (handle_t h : handles) {
+    REQUIRE(h.done());
+    REQUIRE(h.promise().result_or_rethrow().status == 200);
+  }
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

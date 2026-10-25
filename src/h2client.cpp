@@ -655,9 +655,10 @@ dd::task<void> h2client::graceful_stop() {
 
   // waiting all requests finish
 
-  // prevent new requests on this connection
-  if (con && !con->graceful_shutdown_goaway_sended)
-    con->initiate_graceful_shutdown(con->last_initiated_streamid());
+  // Note: не initiate_graceful_shutdown, он отменяет запросы, ещё не отправленные писателем (например
+  // ждущие из-за MAX_CONCURRENT_STREAMS), а их нужно дождаться
+  if (con)
+    con->forbid_new_streams();
   // wait all requests done
   while (m_requestsInProgress != 0)
     co_await sleep(std::chrono::nanoseconds(10), ec);
