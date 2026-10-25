@@ -109,6 +109,11 @@ struct h2server::impl {
         return std::string();
       }
     }();
+    // подряд идущие ошибки accept не должны превращать цикл в спинлок
+    // одиночные ошибки не замедляют приём
+    constexpr duration_t MAX_ACCEPT_BACKOFF = std::chrono::milliseconds(100);
+    constexpr duration_t MIN_ACCEPT_BACKOFF = std::chrono::microseconds(500);
+    duration_t backoff = MIN_ACCEPT_BACKOFF;
     // note: do not remove listener on scope exit
     while (!sessionsgate.is_closed()) {
       io_error_code ec;
@@ -125,9 +130,11 @@ struct h2server::impl {
         HTTP2_LOG(logctx(), ERROR, "accept failed on {}, err: {}", addrstr, ec.message());
         if (sessionsgate.is_closed())
           co_return;
-        else
-          continue;
+        backoff = std::min(backoff * 2, MAX_ACCEPT_BACKOFF);
+        co_await net.sleep(ioctx_ref(), backoff);
+        continue;
       }
+      backoff = MIN_ACCEPT_BACKOFF;
       HTTP2_LOG_TRACE(logctx(), "accepted connection");
       if (!sessionsgate.is_closed()) {
         if (!acceptcb)

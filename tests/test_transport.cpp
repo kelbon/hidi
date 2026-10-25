@@ -286,7 +286,8 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
   any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true);
   a.listen();
   any_io_context plain = make_asio_io_context(rawio);
-  any_connection_t peer = co_await plain.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
+  any_connection_t peer =
+      co_await plain.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
   io_error_code ec;
   any_connection_t con = co_await a.accept(ec);
   REQUIRE(!ec);
