@@ -11,11 +11,25 @@ struct asio_timer::impl {
   std::optional<duration> period;
   timer_callback_t fn;
   bool armed = false;
+  // выставляется set_callback, см. `invoke`
+  bool fn_replaced = false;
   // увеличивается при каждом arm. Отменённое ожидание завершается позже (operation_aborted), и если таймер
   // уже перевзведён, это завершение относится к старому взводу и должно игнорироваться
   uint64_t generation = 0;
 
   explicit impl(boost::asio::io_context& ctx) : timer(ctx) {
+  }
+
+  // колбек может заменить или убрать себя через set_callback во время вызова, поэтому вызывается из локальной
+  // переменной и доживает до конца вызова. На место он возвращается, только если его не заменили
+  void invoke(bool canceled) {
+    if (!fn)
+      return;
+    timer_callback_t f = std::move(fn);
+    fn_replaced = false;
+    f(canceled);
+    if (!fn_replaced)
+      fn = std::move(f);
   }
 };
 
@@ -35,19 +49,18 @@ struct callback_t {
     if (!x || x->generation != generation)
       return;
     if (ec) {
-      if (x->fn)
-        x->fn(/*canceled=*/true);
       x->armed = false;
+      x->invoke(/*canceled=*/true);
       return;
     }
-    if (x->fn)
-      x->fn(/*canceled=*/false);
-    if (!x->period) {
+    if (x->period) {
+      // перевзвод внутри колбека отменит это ожидание, а cancel завершит его с canceled == true
+      x->timer.expires_after(*x->period);
+      x->timer.async_wait(callback_t(w, generation));
+    } else {
       x->armed = false;
-      return;
     }
-    x->timer.expires_after(*x->period);
-    x->timer.async_wait(callback_t(std::move(w), generation));
+    x->invoke(/*canceled=*/false);
   }
 };
 
@@ -79,6 +92,7 @@ bool asio_timer::cancel() noexcept {
 
 void asio_timer::set_callback(timer_callback_t fn) {
   m_impl->fn = std::move(fn);
+  m_impl->fn_replaced = true;
 }
 
 }  // namespace hidi

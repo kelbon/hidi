@@ -13,7 +13,7 @@ namespace hidi {
 // implementation uses atmost one callback and one arm at one time
 anyany_method2_n(arm_m, arm, (&self, deadline_t d) requires(self.arm(d))->void);
 // arms timer after 'd' and repeats this each 'd'
-// new arm will be after executing task
+// period counts from the previous tick, not from the end of the callback
 // if timer was armed, its canceled first
 anyany_method2_n(arm_periodic_m, arm_periodic, (&self, duration_t d) requires(self.arm_periodic(d))->void);
 // returns 'true' if timer was armed before 'cancel'

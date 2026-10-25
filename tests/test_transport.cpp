@@ -40,6 +40,66 @@ TRANSPORT_TEST("shutdown does not wait for blocked write") {
 }
 
 // сервер принял TCP соединение, но не отвечает на TLS handshake. Клиент должен уважать deadline
+// разрушение колбека отмечается во внешнем флаге
+struct destroy_mark {
+  bool* destroyed;
+  explicit destroy_mark(bool* d) noexcept : destroyed(d) {
+  }
+  destroy_mark(destroy_mark&& o) noexcept : destroyed(std::exchange(o.destroyed, nullptr)) {
+  }
+  ~destroy_mark() {
+    if (destroyed)
+      *destroyed = true;
+  }
+};
+
+// Колбек таймера может перевзвести таймер и заменить себя через set_callback. Таймер остаётся взведённым, а
+// заменённый колбек доживает до конца своего вызова
+TRANSPORT_TEST("timer callback rearms and replaces itself") {
+  any_io_context ioctx = make_asio_io_context(rawio);
+  any_timer timer = ioctx.create_timer();
+  bool fired = false;
+  bool canceled = false;
+  SECTION("rearm") {
+    timer.set_callback([&](bool c) {
+      if (c) {
+        canceled = true;
+        return;
+      }
+      fired = true;
+      timer.arm(std::chrono::hours(1));
+    });
+    timer.arm(std::chrono::milliseconds(1));
+    co_await wait_until([&] { return fired; }, *&ioctx);
+    REQUIRE(timer.is_armed());
+    REQUIRE(timer.cancel());
+    co_await wait_until([&] { return canceled; }, *&ioctx);
+  }
+  SECTION("rearm with new callback") {
+    bool second = false;
+    timer.set_callback([&](bool) {
+      fired = true;
+      timer.set_callback([&](bool c) { second = !c; });
+      timer.arm(std::chrono::milliseconds(1));
+    });
+    timer.arm(std::chrono::milliseconds(1));
+    co_await wait_until([&] { return second; }, *&ioctx);
+  }
+  SECTION("clear own callback") {
+    bool destroyed = false;
+    bool destroyed_during_call = true;
+    timer.set_callback([&, mark = destroy_mark(&destroyed)](bool) {
+      timer.set_callback({});
+      destroyed_during_call = destroyed;
+      fired = true;
+    });
+    timer.arm(std::chrono::milliseconds(1));
+    co_await wait_until([&] { return fired; }, *&ioctx);
+    REQUIRE(!destroyed_during_call);
+    REQUIRE(destroyed);
+  }
+}
+
 TRANSPORT_TEST("client TLS handshake respects deadline") {
   any_io_context ioctx = make_asio_tls_io_context(rawio, make_ssl_context_for_client({}));
   boost::asio::ip::tcp::acceptor silent(rawio, localhost());
