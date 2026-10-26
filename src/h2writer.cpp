@@ -59,7 +59,7 @@ static void generate_http2_connect_headers(const h2stream& node, hpack::encoder&
     encoder.encode_with_cache(hpack::static_table_t::authority, req.authority, out);
   }
   for (auto& h : req.headers)
-    encoder.encode(h.name(), h.value(), out);
+    encoder.encode_auto(h.name(), h.value(), out);
 }
 
 template <bool IS_CLIENT>
@@ -112,7 +112,7 @@ static void generate_http2_headers_to(const h2stream& node, hpack::encoder& enco
 
   for (auto& [name, value] : request.headers) {
     assert(is_lowercase(name) && "http2 requires headers to be in lowercase");
-    encoder.encode_with_cache(name, value, out);
+    encoder.encode_auto(name, value, out);
   }
 }
 
@@ -251,7 +251,7 @@ static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, ht
   auto out = std::back_inserter(bytes);
   for (auto& [name, value] : headers) {
     assert(is_lowercase(name) && "http2 requires headers to be in lowercase");
-    con.encoder.encode_with_cache(name, value, out);
+    con.encoder.encode_auto(name, value, out);
   }
   size_t framelen = bytes.size() - H2FHL;
   frame_header fhdr;
