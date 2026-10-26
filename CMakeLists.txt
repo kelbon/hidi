@@ -41,6 +41,7 @@ add_library(hidilib ${CMAKE_CURRENT_SOURCE_DIR}/src/http_base.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/timer.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/utils/unique_name.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/io_impl.cpp
+                  ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/buffered_connection.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/io.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/ssl_context.cpp
             )

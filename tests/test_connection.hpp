@@ -369,8 +369,10 @@ inline dd::job run_test(std::string_view testname, dd::task<void> test, bool& en
 }
 
 template <auto* Foo>
-void server_test_impl(std::string_view name, moko3::section_info* section, server_ssl_context_ptr ssl) {
-  echo_server server(h2server_options{}, make_asio_tls_io_context(ssl));
+void server_test_impl(std::string_view name, moko3::section_info* section, server_ssl_context_ptr ssl,
+                      bool buffer_writes) {
+  echo_server server(h2server_options{},
+                     make_asio_tls_io_context(ssl, tcp_connection_options{.buffer_writes = buffer_writes}));
   internet_address addr(asio::ip::address_v4::loopback(), /*port_num=*/0);
   addr = server.listen({.addr = addr, .reuse_address = true});
   bool test_ended = false;
@@ -385,9 +387,9 @@ void server_test_impl(std::string_view name, moko3::section_info* section, serve
 
 // TODO tls?
 template <auto* Foo>
-void client_test_impl(std::string_view name, moko3::section_info* toplvl_section) {
+void client_test_impl(std::string_view name, moko3::section_info* toplvl_section, bool buffer_writes) {
   hidi::h2client client(endpoint(asio::ip::address_v4::loopback()), h2client_options{},
-                        make_asio_io_context());
+                        make_asio_io_context(tcp_connection_options{.buffer_writes = buffer_writes}));
   bool test_ended = false;
   std::exception_ptr ex;
   (void)run_test(name, Foo(client, *&client.ioctx(), toplvl_section), test_ended, ex);
@@ -417,39 +419,57 @@ void transport_test_impl(std::string_view name, moko3::section_info* section) {
 // and return dd::task<void>
 // second arg is optional expression for creating TLS context, is this case test goes twice - with tls and
 // without tls (code can use is_tls_server variable)
-#define SERVER_TEST(NAME, ...)                                                                           \
-  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,          \
-                                    ::hidi::any_io_context_ref ioctx, ::moko3::section_info* _section,   \
-                                    bool is_tls_server);                                                 \
-  TEST(NAME) {                                                                                           \
-    SECTION("NO TLS", 0) {                                                                               \
-      ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, nullptr);                              \
-    }                                                                                                    \
-    __VA_OPT__(                                                                                          \
-        SECTION("TLS", 1) { ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, __VA_ARGS__); }) \
-  }                                                                                                      \
-  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,          \
-                                    ::hidi::any_io_context_ref ioctx, ::moko3::section_info* _section,   \
+// каждый вариант прогоняется дважды: с tcp_connection_options::buffer_writes и без
+#define SERVER_TEST(NAME, ...)                                                                         \
+  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,        \
+                                    ::hidi::any_io_context_ref ioctx, ::moko3::section_info* _section, \
+                                    bool is_tls_server);                                               \
+  TEST(NAME) {                                                                                         \
+    SECTION("NO TLS", 0) {                                                                             \
+      SECTION("direct writes", 2) {                                                                    \
+        ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, nullptr, false);                   \
+      }                                                                                                \
+      SECTION("buffered writes", 3) {                                                                  \
+        ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, nullptr, true);                    \
+      }                                                                                                \
+    }                                                                                                  \
+    __VA_OPT__(SECTION("TLS", 1) {                                                                     \
+      SECTION("direct writes", 4) {                                                                    \
+        ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, __VA_ARGS__, false);               \
+  }                                                                                                    \
+  SECTION("buffered writes", 5) {                                                                      \
+    ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, __VA_ARGS__, true);                    \
+  }                                                                                                    \
+  })                                                                                                   \
+  }                                                                                                    \
+  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,        \
+                                    ::hidi::any_io_context_ref ioctx, ::moko3::section_info* _section, \
                                     bool is_tls_server)
 
 // after this macro expected function scope, which will use `client`, `ioctx`
 // and return dd::task<void>
+// тест прогоняется дважды: с tcp_connection_options::buffer_writes и без
 #define CLIENT_TEST(NAME)                                                                       \
   ::dd::task<void> UNIQUE_TEST_NAME(::hidi::h2client& client, ::hidi::any_io_context_ref ioctx, \
                                     ::moko3::section_info* _section);                           \
   TEST(NAME) {                                                                                  \
-    ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section);                                \
+    SECTION("direct writes", 0) {                                                               \
+      ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, false);                       \
+    }                                                                                           \
+    SECTION("buffered writes", 1) {                                                             \
+      ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, true);                        \
+    }                                                                                           \
   }                                                                                             \
   ::dd::task<void> UNIQUE_TEST_NAME(::hidi::h2client& client, ::hidi::any_io_context_ref ioctx, \
                                     ::moko3::section_info* _section)
 
 // тест транспортного уровня (без HTTP/2). После макроса ожидается тело функции, возвращающей
 // dd::task<void>, ему доступен `rawio` (asio::io_context), на котором создаются any_io_context, сокеты и т.д.
-#define TRANSPORT_TEST(NAME)                                                                             \
+#define TRANSPORT_TEST(NAME)                                                                            \
   ::dd::task<void> UNIQUE_TEST_NAME(::boost::asio::io_context& rawio, ::moko3::section_info* _section); \
-  TEST(NAME) {                                                                                           \
-    ::hidi::transport_test_impl<&UNIQUE_TEST_NAME>(NAME, _section);                                      \
-  }                                                                                                      \
+  TEST(NAME) {                                                                                          \
+    ::hidi::transport_test_impl<&UNIQUE_TEST_NAME>(NAME, _section);                                     \
+  }                                                                                                     \
   ::dd::task<void> UNIQUE_TEST_NAME(::boost::asio::io_context& rawio, ::moko3::section_info* _section)
 
 }  // namespace hidi

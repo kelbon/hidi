@@ -7,7 +7,8 @@
 
 using namespace hidi;
 
-h2server_mt server(std::in_place_type<bench_server>);
+h2server_mt server(std::in_place_type<bench_server>, server_ssl_context_ptr(nullptr), h2server_options{},
+                   tcp_connection_options{.buffer_writes = true});
 
 void on_ctrl_c(int) {
   server.request_stop();

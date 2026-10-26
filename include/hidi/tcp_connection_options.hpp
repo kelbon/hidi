@@ -16,6 +16,13 @@ struct tcp_connection_options {
   std::vector<std::filesystem::path> additional_ssl_certificates;
   // adds delay (waiting for new requests to merge them)
   bool merge_small_requests = false;
+  // true - запись не идёт в сокет сразу, а копируется в буфер соединения и отправляется одной записью в конце
+  //   такта (когда выполнятся все уже готовые задачи). Сильно уменьшает число системных вызовов при множестве
+  //   мелких кадров, например ответов на много одновременных запросов. Ошибка записи становится известна
+  //   позже, а закрытие соединения сначала дописывает принятое
+  // false - каждая запись сразу идёт в сокет без копирования. Выгодно, когда в основном передаются большие
+  //   тела (сотни КБ и больше)
+  bool buffer_writes = false;
   bool is_primal_connection = true;
   /*
     if unset, SSL host name verification disabled.

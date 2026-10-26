@@ -163,7 +163,12 @@ struct fuzzer {
       select(ctxs)->poll_one();
     if (d.is_reached())
       throw timeout_exception();
-    (ioctxs.poll(), ...);  // do pending jobs if some
+    // доделать готовые задачи. Контексты опрашиваются по очереди: задача одного может ждать задачу другого,
+    // например сервер ждёт RST_STREAM, который клиент отправит только в конце своего такта
+    for (bool any = true; any;) {
+      any = false;
+      ((any |= ioctxs.poll_one()), ...);
+    }
   }
 
   void run_until(auto condition, auto&&... ioctxs) {
