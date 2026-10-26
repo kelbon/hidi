@@ -76,7 +76,7 @@ void decode_headers_block_safe(hpack::decoder& dec, std::span<const byte_t> byte
   }
 }
 
-static void validate_trailer_header(std::string_view name, stream_id_t streamid) {
+static void validate_trailer_header(std::string_view name, std::string_view value, stream_id_t streamid) {
   // https://www.rfc-editor.org/rfc/rfc7540#section-8.1.2.1
   // ( Pseudo-header fields MUST NOT appear in trailers )
   if (name.starts_with(':')) {
@@ -85,6 +85,21 @@ static void validate_trailer_header(std::string_view name, stream_id_t streamid)
         std::format("trailers section must not include pseudo-headers, name: {}, streamid: {}", name,
                     streamid));
   }
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1 некорректные трейлеры - ошибка стрима
+  if (std::optional<std::string> err = validate_header_name(name, value))
+    throw stream_error(errc_e::PROTOCOL_ERROR, streamid, std::move(*err));
+}
+
+// :status уже разобран
+static void validate_response_header(std::string_view name, std::string_view value, stream_id_t streamid) {
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.3.2 в ответе только один псевдозаголовок :status
+  if (name.starts_with(':')) {
+    throw stream_error(errc_e::PROTOCOL_ERROR, streamid,
+                       std::format("unexpected pseudoheader in response, name: {}", name));
+  }
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1 некорректный ответ - ошибка стрима
+  if (std::optional<std::string> err = validate_header_name(name, value))
+    throw stream_error(errc_e::PROTOCOL_ERROR, streamid, std::move(*err));
 }
 
 void h2stream::receive_trailers_headers(hpack::decoder& decoder, h2frame frame) {
@@ -98,7 +113,7 @@ void h2stream::receive_trailers_headers(hpack::decoder& decoder, h2frame frame) 
   end_stream_received = true;
   decode_headers_block_safe(decoder, frame.data, [&](std::string_view name, std::string_view value) {
     HTTP2_LOG_TRACE(this->logctx(), "name: {}, value: {}", name, value);
-    validate_trailer_header(name, frame.header.streamid);
+    validate_trailer_header(name, value, frame.header.streamid);
     if (on_header_fn)
       (*on_header_fn)(name, value);
   });
@@ -163,6 +178,7 @@ void h2stream::receive_response_headers(hpack::decoder& decoder, h2frame frame) 
   // headers must be decoded to maintain HPACK dynamic table in correct state
   decode_headers_block_safe(decoder, std::span(in, e), [&](std::string_view name, std::string_view value) {
     HTTP2_LOG_TRACE(this->logctx(), "name: {}, value: {}", name, value);
+    validate_response_header(name, value, streamid);
     if (on_header_fn)
       (*on_header_fn)(name, value);
   });

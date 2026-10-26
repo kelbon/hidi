@@ -40,7 +40,7 @@ CLIENT_TEST("client continuations") {
 
   std::vector<header> hdrs{
       {":status", "200"},
-      {"X-customhdr", std::string(MIN_MAX_FRAME_LEN, 'A')},
+      {"x-customhdr", std::string(MIN_MAX_FRAME_LEN, 'A')},
   };
   auto bytes = server.encode_headers(hdrs);
   co_await server.send_raw_hdr(1, bytes, /*end_stream=*/true, /*split=*/true);
