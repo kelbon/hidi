@@ -49,7 +49,7 @@ void default_log_function(log_level_e, std::string_view fmt_str, std::format_arg
 
 // log_level_e checked before invoking, but passed for more information / advanced log filtering
 // precondition: fmt str and args compile-time checked
-using log_fn_t = fn<void(log_level_e, std::string_view fmt_str, std::format_args) const>;
+using log_fn_t = copyable_fn<void(log_level_e, std::string_view fmt_str, std::format_args) const>;
 
 struct log_context {
   log_level_e lvl = log_level_e::INFO;
