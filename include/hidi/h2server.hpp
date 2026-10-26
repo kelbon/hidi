@@ -36,6 +36,9 @@ struct h2server {
   // pre: c.has_value() == true
   explicit h2server(h2server_options, any_io_context c);
 
+  // creates non-tls server with tcp options (e.g. tcp_connection_options::buffer_writes)
+  h2server(h2server_options, tcp_connection_options);
+
   // if ssl context ptr is nullptr, then its http server (not https)
   // uses asio_io/asio_tls_io
   explicit h2server(server_ssl_context_ptr, h2server_options = {}, tcp_connection_options = {});
