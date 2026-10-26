@@ -118,8 +118,8 @@ dd::task<h2connection_ptr> establish_http2_session_client(h2connection_ptr con, 
 
   // https://www.rfc-editor.org/rfc/rfc7541#section-4.2
   // кодировщик начинает с размера по умолчанию и сообщает новый размер в первом блоке заголовков
-  con->encodertablesizechangerequested =
-      con->remote_settings.header_table_size != settings_t{}.header_table_size;
+  if (con->encoder_table_size() != settings_t{}.header_table_size)
+    con->encoder_table_size_changed();
   con->remote_settings.max_frame_size =
       std::min(con->remote_settings.max_frame_size, options.max_send_frame_size);
 
@@ -220,8 +220,8 @@ dd::task<h2connection_ptr> establish_http2_session_server(h2connection_ptr con, 
   // con->decoder = hpack::decoder(con->local_settings.header_table_size);
   // https://www.rfc-editor.org/rfc/rfc7541#section-4.2
   // кодировщик начинает с размера по умолчанию и сообщает новый размер в первом блоке заголовков
-  con->encodertablesizechangerequested =
-      con->remote_settings.header_table_size != settings_t{}.header_table_size;
+  if (con->encoder_table_size() != settings_t{}.header_table_size)
+    con->encoder_table_size_changed();
   // client settings ACK will be handled by server reader
 
   HTTP2_LOG_TRACE(con->logctx, "client session successfully established");

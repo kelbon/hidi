@@ -12,6 +12,7 @@
 #include "hidi/utils/fn_ref.hpp"
 #include "hidi/asio/aio_context.hpp"
 
+#include <optional>
 #include <span>
 
 #include <boost/intrusive/list.hpp>
@@ -245,8 +246,10 @@ struct h2connection {
   // Server may send SETTINGS frame with reduced hpack table size,
   // this means request for client encoder to send dynamic_size_update
   //
-  // if true, new value in server_settings.header_table_size
-  bool encodertablesizechangerequested = false;
+  // если есть значение, кодировщик сообщит новый размер таблицы в начале следующего блока заголовков
+  // Значение - наименьший SETTINGS_HEADER_TABLE_SIZE собеседника с последнего блока заголовков,
+  // см. start_headers_block
+  std::optional<uint32_t> encodertablesizerequested;
   // правила для первого фрейма SETTINGS отличаются от правил для последующих
   bool first_settings_frame_received = false;
   hpack::decoder decoder;
@@ -598,18 +601,40 @@ struct h2connection {
   // used when SETTINGS_INITIAL_WINDOW_SIZE changed
   void adjust_window_for_all_streams(cfint_t old_window_size, cfint_t new_window_size);
 
+  // ограничение размера, чтобы нас не заставили хранить 4 Гб
+  uint32_t encoder_table_size_limit() const noexcept {
+    return local_settings.header_table_size;
+  }
+
+  // размер таблицы, который использует кодировщик
+  uint32_t encoder_table_size() const noexcept {
+    return std::min(remote_settings.header_table_size, encoder_table_size_limit());
+  }
+
+  // собеседник изменил SETTINGS_HEADER_TABLE_SIZE (новое значение в remote_settings), кодировщик сообщит
+  // новый размер таблицы в начале следующего блока заголовков
+  void encoder_table_size_changed() noexcept {
+    uint32_t s = remote_settings.header_table_size;
+    encodertablesizerequested = encodertablesizerequested ? std::min(*encodertablesizerequested, s) : s;
+  }
+
   inline void start_headers_block(h2stream& node, bool force_disable_hpack, bytes_t& hdrs) {
     // https://www.rfc-editor.org/rfc/rfc9113.html#name-settings-synchronization
-    if (encodertablesizechangerequested) [[unlikely]] {
-      encodertablesizechangerequested = false;
+    if (encodertablesizerequested) [[unlikely]] {
+      uint32_t smallest = std::min(*encodertablesizerequested, encoder_table_size_limit());
+      encodertablesizerequested.reset();
       encoder.dyntab.set_user_protocol_max_size(remote_settings.header_table_size);
       // encoding dyntab size update also updates size
       if (force_disable_hpack) {
         encoder.encode_dynamic_table_size_update(0, std::back_inserter(hdrs));
       } else {
-        // not sure if encoder required to send it, but its not error, so just set max size for new settings
-        encoder.encode_dynamic_table_size_update(encoder.dyntab.user_protocol_max_size(),
-                                                 std::back_inserter(hdrs));
+        uint32_t size = encoder_table_size();
+        // https://www.rfc-editor.org/rfc/rfc7541#section-4.2
+        // если с прошлого блока размер уменьшался и снова вырос, сначала нужно сообщить наименьший:
+        // декодер собеседника уже уменьшил таблицу и вытеснил записи
+        if (smallest < size)
+          encoder.encode_dynamic_table_size_update(smallest, std::back_inserter(hdrs));
+        encoder.encode_dynamic_table_size_update(size, std::back_inserter(hdrs));
       }
     } else if (node.streamid == 1 && force_disable_hpack) [[unlikely]] {
       encoder.encode_dynamic_table_size_update(0, std::back_inserter(hdrs));

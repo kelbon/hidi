@@ -267,9 +267,9 @@ void h2connection::settings_changed(h2frame newsettings, bool remote_is_client) 
   if (before.header_table_size != remote_settings.header_table_size) {
     HTTP2_LOG(logctx, INFO, "HPACK table resized: new size {}, old size: {}",
               remote_settings.header_table_size, before.header_table_size);
-    encodertablesizechangerequested = true;
+    encoder_table_size_changed();
   }
-  // encoder обновится на основании новых настроек когда писатель увидит `encodertablesizechangerequested`
+  // encoder обновится на основании новых настроек когда писатель увидит `encodertablesizerequested`
   adjust_window_for_all_streams(before.initial_stream_window_size,
                                 remote_settings.initial_stream_window_size);
   // могли измениться окна стримов и MAX_CONCURRENT_STREAMS
