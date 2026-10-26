@@ -9,8 +9,10 @@
 namespace hidi {
 
 struct tcp_connection_options {
-  uint32_t send_buffer_size = 1024 * 64;     // 64 KB
-  uint32_t receive_buffer_size = 1024 * 64;  // 64 KB
+  // SO_SNDBUF / SO_RCVBUF. Если не заданы, размер буферов подбирает ОС
+  // (в Linux явно заданный размер отключает автоматическую подстройку буфера)
+  std::optional<uint32_t> send_buffer_size = std::nullopt;
+  std::optional<uint32_t> receive_buffer_size = std::nullopt;
   std::vector<std::filesystem::path> additional_ssl_certificates;
   // adds delay (waiting for new requests to merge them)
   bool merge_small_requests = false;
