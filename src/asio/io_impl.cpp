@@ -1,7 +1,10 @@
 #include "hidi/asio/io_impl.hpp"
 #include "hidi/asio/asio_executor.hpp"
 #include "hidi/asio/awaiters.hpp"
+#include "hidi/asio/buffered_connection.hpp"
 #include "hidi/tcp_connection_options.hpp"
+
+#include "connection_common.hpp"
 
 #include <kelcoro/job.hpp>
 
@@ -44,54 +47,42 @@ void apply_tcp_options(boost::asio::basic_socket<boost::asio::ip::tcp, E>& tcp_s
 
 namespace hidi {
 
-static void rebind_executor(asio_connection& c, asio::io_context& new_ioctx) {
-  asio::ip::tcp::socket newsock(new_ioctx);
-  io_error_code ec;
-  auto p = c.sock.local_endpoint(ec).protocol();
-  if (ec)
-    throw network_exception(ec);
-  auto rawsock = c.sock.release(ec);
-  if (ec)
-    throw network_exception(ec);
-  ec = newsock.assign(p, rawsock, ec);
-  if (ec)
-    throw network_exception(ec);
-  // assign не знает, что сокет был неблокирующим. Без этого синхронный write_some в try_write при полном
-  // буфере сокета ждёт в poll и блокирует весь поток
-  ec = newsock.non_blocking(true, ec);
-  if (ec)
-    throw network_exception(ec);
-  c.sock = std::move(newsock);
+template <typename Context>
+static void do_rebind_tcp_context(any_connection_t& con, any_io_context_ref other) {
+  asio::io_context& ioctx = aa::any_cast<std::remove_cv_t<Context>&>(other).ioctx;
+  if (auto* p = dynamic_cast<asio_connection*>(con.get())) {
+    noexport::rebind_tcp_executor(*p, ioctx);
+  } else {
+    auto* b = dynamic_cast<asio_buffered_connection*>(con.get());
+    assert(b);
+    noexport::rebind_tcp_executor(*b, ioctx);
+  }
 }
 
-static void rebind_executor(asio_tls_connection& c, asio::io_context& new_ioctx) {
-  asio::ip::tcp::socket newsock(new_ioctx);
-  io_error_code ec;
-  auto p = c.sock.lowest_layer().local_endpoint(ec).protocol();
-  if (ec)
-    throw network_exception(ec);
-  auto rawsock = c.sock.lowest_layer().release(ec);
-  if (ec)
-    throw network_exception(ec);
-  ec = newsock.assign(p, rawsock, ec);
-  if (ec)
-    throw network_exception(ec);
-  ec = newsock.non_blocking(true, ec);
-  if (ec)
-    throw network_exception(ec);
-  // rebind делается до TLS handshake (см. connection_i::handshake), состояния TLS ещё нет, поэтому
-  // ssl::stream пересоздаётся целиком. Его внутренние таймеры (pending_read_ / pending_write_) создаются на
-  // executor потока и при замене только сокета остались бы на старом io_context: ожидание одной операции TLS
-  // другой (например чтение, которому нужно записать ответ на KeyUpdate, пока идёт запись) завершалось бы в
-  // чужом потоке
-  c.sock = asio::ssl::stream<asio::ip::tcp::socket>(std::move(newsock), c.sslctx->ctx);
+template <typename Context>
+static void do_rebind_tls_context(any_connection_t& con, any_io_context_ref other) {
+  asio::io_context& ioctx = aa::any_cast<std::remove_cv_t<Context>&>(other).ioctx;
+  if (auto* p = dynamic_cast<asio_tls_connection*>(con.get())) {
+    noexport::rebind_tls_executor(*p, ioctx);
+  } else {
+    auto* b = dynamic_cast<asio_tls_buffered_connection*>(con.get());
+    assert(b);
+    noexport::rebind_tls_executor(*b, ioctx);
+  }
 }
 
-template <typename Connection, typename Context>
-static void do_rebind_context(any_connection_t& con, any_io_context_ref other) {
-  auto* p = dynamic_cast<Connection*>(con.get());
-  assert(p);
-  rebind_executor(*p, aa::any_cast<std::remove_cv_t<Context>&>(other).ioctx);
+// см. tcp_connection_options::buffer_writes
+static any_connection_t make_tcp_connection(asio::ip::tcp::socket sock, const tcp_connection_options& opts) {
+  if (opts.buffer_writes)
+    return any_connection_t(new asio_buffered_connection(std::move(sock)));
+  return any_connection_t(new asio_connection(std::move(sock)));
+}
+
+static any_connection_t make_tls_connection(asio::ip::tcp::socket sock, ssl_context_ptr ctx,
+                                            const tcp_connection_options& opts) {
+  if (opts.buffer_writes)
+    return any_connection_t(new asio_tls_buffered_connection(std::move(sock), std::move(ctx)));
+  return any_connection_t(new asio_tls_connection(std::move(sock), std::move(ctx)));
 }
 
 // Гарантирует:
@@ -127,44 +118,7 @@ static dd::job start_inner_writer_for(auto* self) {
         hidi::unreachable();
       }
     }
-    // TODO experiment flush
   }
-}
-
-[[nodiscard]] static bool do_try_read(noexport::single_read_assumption& rd, std::span<byte_t> buf) noexcept {
-  size_t avail = rd.readen_end - rd.readen_start;
-  bool b = avail >= buf.size();
-  if (b && !buf.empty()) {
-    memcpy(buf.data(), rd.readen_start, buf.size());
-    rd.readen_start += buf.size();
-  }
-  return b;
-}
-
-static dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& ec,
-                            std::coroutine_handle<> callback) {
-  size_t readen = 0;
-  const size_t userbufsz = userbuf.size();
-  byte_t* const userbufend = userbuf.data() + userbufsz;
-  while (readen < userbufsz) {
-    readen += co_await net.read_some_many(c.sock, ec, std::span(userbuf.data() + readen, userbufend),
-                                          std::span(c.readdata.readen));
-    if (ec) [[unlikely]]
-      break;
-  }
-  // при ошибке может быть прочитано меньше userbufsz, тогда в readdata ничего не попало
-  if (readen > userbufsz)
-    c.readdata.readen_end += readen - userbufsz;
-  co_await dd::this_coro::destroy_and_transfer_control_to(callback);
-}
-
-static void do_start_read(auto& self, std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
-  // assumes only one reader at one time
-  size_t avail = self.readdata.readen_end - self.readdata.readen_start;
-  assert(avail < buf.size());  // start_read must be invoked only if try_read failed
-  memcpy(buf.data(), self.readdata.readen_start, avail);
-  self.readdata.readen_start = self.readdata.readen_end = self.readdata.readen;
-  (void)do_read_some(self, suffix(buf, buf.size() - avail), ec, h);
 }
 
 static size_t do_try_write(auto& self, std::span<const byte_t> buf, io_error_code& ec) {
@@ -195,20 +149,6 @@ static void do_start_write(noexport::single_writer_guarantee& g, writer_node* n)
   g.notify_writer();
 }
 
-static void close_tcp_sock(auto& tcp_sock) {
-  if (!tcp_sock.is_open())
-    return;
-  io_error_code ec;
-  ec = tcp_sock.cancel(ec);
-  // dont stop on errors, i need to stop connection somehow
-  (void)ec;
-  // Do not do SSL shutdown, useless errors and wasting time
-  ec = tcp_sock.shutdown(asio::socket_base::shutdown_both, ec);
-  (void)ec;
-  ec = tcp_sock.close(ec);
-  (void)ec;
-}
-
 dd::task<void> do_shutdown(noexport::single_writer_guarantee& wd, auto& sock) {
   if (!wd.allow_write) {
     assert(wd.writer == nullptr);
@@ -226,7 +166,7 @@ dd::task<void> do_shutdown(noexport::single_writer_guarantee& wd, auto& sock) {
   while (!wd.writer_done())
     co_await yield_on_asio_ioctx(sock.get_executor());
   std::exchange(wd.writer, nullptr).destroy();
-  close_tcp_sock(sock);
+  noexport::close_tcp_sock(sock);
 }
 
 asio_tls_connection::asio_tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx)
@@ -237,11 +177,11 @@ asio_tls_connection::asio_tls_connection(asio::ip::tcp::socket s, ssl_context_pt
 }
 
 bool asio_tls_connection::try_read(std::span<byte_t> buf) noexcept {
-  return do_try_read(readdata, buf);
+  return noexport::do_try_read(readdata, buf);
 }
 
 void asio_tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
-  do_start_read(*this, h, buf, ec);
+  noexport::do_start_read(*this, h, buf, ec);
 }
 
 size_t asio_tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
@@ -275,11 +215,11 @@ asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
 }
 
 bool asio_connection::try_read(std::span<byte_t> buf) noexcept {
-  return do_try_read(readdata, buf);
+  return noexport::do_try_read(readdata, buf);
 }
 
 void asio_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
-  do_start_read(*this, h, buf, ec);
+  noexport::do_start_read(*this, h, buf, ec);
 }
 
 size_t asio_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
@@ -325,7 +265,7 @@ static dd::task<any_connection_t> do_create_connection_client(auto& self, remote
   timer.set_callback([&](bool canceled) {
     if (!canceled) {
       timeoutflag = true;
-      close_tcp_sock(tcp_sock);
+      noexport::close_tcp_sock(tcp_sock);
     }
   });
   if (ep.local) {
@@ -339,7 +279,7 @@ static dd::task<any_connection_t> do_create_connection_client(auto& self, remote
   if (self.starter)
     co_await self.starter(tcp_sock, deadline);
   apply_tcp_options(tcp_sock, self.options);
-  co_return any_connection_t(new asio_connection(std::move(tcp_sock)));
+  co_return make_tcp_connection(std::move(tcp_sock), self.options);
 }
 
 asio_io::asio_io(tcp_connection_options opts, starter_t s) : options(std::move(opts)), starter(std::move(s)) {
@@ -369,7 +309,7 @@ struct asio_acceptor {
     if (ec)
       co_return nullptr;
     apply_tcp_options(socket, options);
-    co_return any_connection_t(new asio_connection(std::move(socket)));
+    co_return make_tcp_connection(std::move(socket), options);
   }
 
   void close() {
@@ -382,7 +322,7 @@ any_acceptor asio_io::create_acceptor(internet_address addr, bool reuse_address)
 }
 
 void asio_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_context<asio_connection, asio_io>(con, other);
+  do_rebind_tcp_context<asio_io>(con, other);
 }
 
 asio_ref_io::asio_ref_io(asio::io_context& ctx, tcp_connection_options opts, starter_t s)
@@ -399,10 +339,51 @@ any_acceptor asio_ref_io::create_acceptor(internet_address addr, bool reuse_addr
 }
 
 void asio_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_context<asio_connection, asio_ref_io>(con, other);
+  do_rebind_tcp_context<asio_ref_io>(con, other);
 }
 
 // TLS
+
+// настраивает TLS клиента и делает handshake. Connection: asio_tls_connection или
+// asio_tls_buffered_connection
+template <typename Connection>
+static dd::task<any_connection_t> client_tls_handshake(auto& self, asio::ip::tcp::socket tcp_sock,
+                                                       const remote_and_local_endpoints& ep,
+                                                       asio_timer& timer, bool& timeoutflag) {
+  namespace ssl = asio::ssl;
+  io_error_code ec;
+  std::unique_ptr<Connection> res(new Connection(std::move(tcp_sock), self.client_sslctx));
+  // tcp_sock перемещён, теперь по таймауту нужно закрывать сокет внутри res
+  timer.set_callback([&](bool canceled) {
+    if (!canceled) {
+      timeoutflag = true;
+      noexport::close_tcp_sock(res->sock.lowest_layer());
+    }
+  });
+  if (self.options.host_for_name_verification) {
+    res->sock.set_verify_mode(ssl::verify_peer);
+    res->sock.set_verify_callback(
+        asio::ssl::host_name_verification(*self.options.host_for_name_verification));
+  } else {
+    res->sock.set_verify_mode(ssl::verify_none);
+  }
+  if (!self.options.is_primal_connection)
+    SSL_set_mode(res->sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
+  // SNI, по RFC 6066 только для доменного имени, не для IP адреса
+  if (const std::string* host = ep.remote.fqdn()) {
+    io_error_code ipec;
+    (void)asio::ip::make_address(*host, ipec);
+    if (ipec && !SSL_set_tlsext_host_name(res->sock.native_handle(), host->c_str()))
+      throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
+  }
+  co_await net.handshake(res->sock, ssl::stream_base::handshake_type::client, ec);
+  if (timeoutflag)
+    throw timeout_exception();
+  if (ec)
+    throw network_exception("[TCP/SSL] cannot ssl handshake: {}", ec.message());
+  co_return any_connection_t(std::move(res));
+}
 
 static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, remote_and_local_endpoints ep,
                                                                   deadline_t deadline) {
@@ -435,7 +416,7 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
   timer.set_callback([&](bool canceled) {
     if (!canceled) {
       timeoutflag = true;
-      close_tcp_sock(tcp_sock);
+      noexport::close_tcp_sock(tcp_sock);
     }
   });
   if (ep.local) {
@@ -453,37 +434,12 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
   apply_tcp_options(tcp_sock, self.options);
   if (!self.client_sslctx)
     self.client_sslctx = make_ssl_context_for_client(self.options.additional_ssl_certificates).p;
-  std::unique_ptr<asio_tls_connection> res(new asio_tls_connection(std::move(tcp_sock), self.client_sslctx));
-  // tcp_sock перемещён, теперь по таймауту нужно закрывать сокет внутри res
-  timer.set_callback([&](bool canceled) {
-    if (!canceled) {
-      timeoutflag = true;
-      close_tcp_sock(res->sock.lowest_layer());
-    }
-  });
-  if (self.options.host_for_name_verification) {
-    res->sock.set_verify_mode(ssl::verify_peer);
-    res->sock.set_verify_callback(
-        asio::ssl::host_name_verification(*self.options.host_for_name_verification));
-  } else {
-    res->sock.set_verify_mode(ssl::verify_none);
+  if (self.options.buffer_writes) {
+    co_return co_await client_tls_handshake<asio_tls_buffered_connection>(self, std::move(tcp_sock), ep,
+                                                                          timer, timeoutflag);
   }
-  if (!self.options.is_primal_connection)
-    SSL_set_mode(res->sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
-  // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
-  // SNI, по RFC 6066 только для доменного имени, не для IP адреса
-  if (const std::string* host = ep.remote.fqdn()) {
-    io_error_code ipec;
-    (void)asio::ip::make_address(*host, ipec);
-    if (ipec && !SSL_set_tlsext_host_name(res->sock.native_handle(), host->c_str()))
-      throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
-  }
-  co_await net.handshake(res->sock, ssl::stream_base::handshake_type::client, ec);
-  if (timeoutflag)
-    throw timeout_exception();
-  if (ec)
-    throw network_exception("[TCP/SSL] cannot ssl handshake: {}", ec.message());
-  co_return any_connection_t(std::move(res));
+  co_return co_await client_tls_handshake<asio_tls_connection>(self, std::move(tcp_sock), ep, timer,
+                                                               timeoutflag);
 }
 
 asio_tls_io::asio_tls_io(client_ssl_context_ptr ctx, tcp_connection_options opts, starter_t s)
@@ -523,7 +479,7 @@ struct asio_tls_acceptor {
       co_return nullptr;
     apply_tcp_options(socket, options);
     // TLS handshake делает сервер через connection_i::handshake
-    co_return any_connection_t(new asio_tls_connection(std::move(socket), sslctx));
+    co_return make_tls_connection(std::move(socket), sslctx, options);
   }
 
   void close() {
@@ -538,7 +494,7 @@ any_acceptor asio_tls_io::create_acceptor(internet_address addr, bool reuse_addr
 }
 
 void asio_tls_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_context<asio_tls_connection, asio_tls_io>(con, other);
+  do_rebind_tls_context<asio_tls_io>(con, other);
 }
 
 asio_tls_ref_io::asio_tls_ref_io(asio::io_context& ctx, client_ssl_context_ptr ssl,
@@ -571,7 +527,7 @@ dd::task<any_connection_t> asio_tls_ref_io::create_connection_client(remote_and_
 }
 
 void asio_tls_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_context<asio_tls_connection, asio_tls_ref_io>(con, other);
+  do_rebind_tls_context<asio_tls_ref_io>(con, other);
 }
 
 }  // namespace hidi

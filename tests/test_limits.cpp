@@ -123,12 +123,12 @@ SERVER_TEST("server bytes limit", test_ssl_ctx()) {
 SERVER_TEST("server sessions limit", test_ssl_ctx()) {
   server.get_options().limit_clients_count = 0;
   auto client = co_await fake_client_connection(ioctx, addr);
-  try {
-    co_await emulate_client_connection(client);
-  } catch (...) {
-    co_return;
-  }
-  // server must drop connection immediately after connect
+  co_await client.send_client_magic();
+  co_await client.send_settings();
+  (void)co_await client.receive_settings();
+  co_await client.receive_settings_ack();
+  // сервер сообщает причину отказа и сразу закрывает соединение
+  co_await client.receive_goaway(0, errc_e::NO_ERROR, ping_e::ERROR);
   co_await client.wait_connection_dropped(deadline_after(1s));
 }
 
