@@ -27,28 +27,14 @@ struct work_awaiter {
 
 template <typename E>
 void apply_tcp_options(boost::asio::basic_socket<boost::asio::ip::tcp, E>& tcp_sock,
-                       hidi::tcp_connection_options opts) try {
+                       const hidi::tcp_connection_options& opts) try {
   using tcp = boost::asio::ip::tcp;
 
   tcp_sock.set_option(tcp::no_delay(!opts.merge_small_requests));
-  {
-    boost::asio::socket_base::send_buffer_size send_sz_option(opts.send_buffer_size);
-    tcp_sock.set_option(send_sz_option);
-    tcp_sock.get_option(send_sz_option);
-    // if (send_sz_option.value() != send_buffer_size) {
-    //   HTTP2_LOG_WARN("tcp sendbuf size option not fully applied, requested: {}, actual: {}",
-    //                  send_buffer_size, send_sz_option.value());
-    // }
-  }
-  {
-    boost::asio::socket_base::receive_buffer_size rsv_sz_option(opts.receive_buffer_size);
-    tcp_sock.set_option(rsv_sz_option);
-    tcp_sock.get_option(rsv_sz_option);
-    // if (rsv_sz_option.value() != receive_buffer_size) {
-    //   HTTP2_LOG_WARN("tcp receive buf size option not fully applied, requested: {}, actual: {}",
-    //                  send_buffer_size, rsv_sz_option.value());
-    // }
-  }
+  if (opts.send_buffer_size)
+    tcp_sock.set_option(boost::asio::socket_base::send_buffer_size(*opts.send_buffer_size));
+  if (opts.receive_buffer_size)
+    tcp_sock.set_option(boost::asio::socket_base::receive_buffer_size(*opts.receive_buffer_size));
 } catch (std::exception& /*e*/) {
   // its not critical if options are not applied
   // HTTP2_LOG_WARN("Cannot apply tcp settings to socket, err: {}", e.what());
@@ -366,6 +352,7 @@ dd::task<any_connection_t> asio_io::create_connection_client(remote_and_local_en
 
 struct asio_acceptor {
   boost::asio::ip::tcp::acceptor a;
+  tcp_connection_options options;
 
   internet_address get_local_endpoint() const {
     return a.local_endpoint();
@@ -381,6 +368,7 @@ struct asio_acceptor {
     co_await net.accept(a, socket, ec);
     if (ec)
       co_return nullptr;
+    apply_tcp_options(socket, options);
     co_return any_connection_t(new asio_connection(std::move(socket)));
   }
 
@@ -390,7 +378,7 @@ struct asio_acceptor {
 };
 
 any_acceptor asio_io::create_acceptor(internet_address addr, bool reuse_address) {
-  return asio_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address}};
+  return asio_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address}, options};
 }
 
 void asio_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
@@ -407,7 +395,7 @@ dd::task<any_connection_t> asio_ref_io::create_connection_client(remote_and_loca
 }
 
 any_acceptor asio_ref_io::create_acceptor(internet_address addr, bool reuse_address) {
-  return asio_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address}};
+  return asio_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address}, options};
 }
 
 void asio_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
@@ -516,6 +504,7 @@ dd::task<any_connection_t> asio_tls_io::create_connection_client(remote_and_loca
 struct asio_tls_acceptor {
   boost::asio::ip::tcp::acceptor a;
   ssl_context_ptr sslctx;
+  tcp_connection_options options;
 
   internet_address get_local_endpoint() const {
     return a.local_endpoint();
@@ -532,6 +521,7 @@ struct asio_tls_acceptor {
     co_await net.accept(a, socket, ec);
     if (ec)
       co_return nullptr;
+    apply_tcp_options(socket, options);
     // TLS handshake делает сервер через connection_i::handshake
     co_return any_connection_t(new asio_tls_connection(std::move(socket), sslctx));
   }
@@ -544,7 +534,7 @@ struct asio_tls_acceptor {
 any_acceptor asio_tls_io::create_acceptor(internet_address addr, bool reuse_address) {
   assert(server_sslctx);
   return asio_tls_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address},
-                           server_sslctx};
+                           server_sslctx, options};
 }
 
 void asio_tls_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
@@ -572,7 +562,7 @@ asio_tls_ref_io::asio_tls_ref_io(asio::io_context& ctx, server_ssl_context_ptr s
 any_acceptor asio_tls_ref_io::create_acceptor(internet_address addr, bool reuse_address) {
   assert(server_sslctx);
   return asio_tls_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address},
-                           server_sslctx};
+                           server_sslctx, options};
 }
 
 dd::task<any_connection_t> asio_tls_ref_io::create_connection_client(remote_and_local_endpoints endpoint,
