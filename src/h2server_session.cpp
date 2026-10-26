@@ -237,8 +237,11 @@ void h2server_session::request_terminate() noexcept {
   terminated = true;
   new_requests_forbiden = true;
 
-  send_goaway(connection, connection->last_initiated_streamid(), errc_e::NO_ERROR, "graceful shutdown")
-      .start_and_detach();
+  // до установки сессии GOAWAY слать нельзя: соединение ещё не HTTP/2 (а для TLS может идти handshake)
+  if (established) {
+    send_goaway(connection, connection->last_initiated_streamid(), errc_e::NO_ERROR, "graceful shutdown")
+        .start_and_detach();
+  }
 
   // forget requests (including not finished)
   auto doforget = [&](h2stream* n) {
