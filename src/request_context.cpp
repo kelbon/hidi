@@ -40,7 +40,7 @@ dd::task<void> request_context::send_interim_response(int status, http_headers_t
   // ignore if CONTINUATION required (hope no one will send such a big interim, hope even no one use
   // send_interim_response not in tests)
   for (auto& h : hdrs)
-    encoder.encode_with_cache(h.name(), h.value(), out);
+    encoder.encode_auto(h.name(), h.value(), out);
   frame_header hdr;
   hdr.length = bytes.size() - FRAME_HEADER_LEN;
   hdr.streamid = node->streamid;
