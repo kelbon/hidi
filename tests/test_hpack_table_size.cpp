@@ -58,6 +58,72 @@ SERVER_TEST("server encoder signals smaller table size") {
   }
 }
 
+// собеседник может разрешить огромную таблицу, но кодировщик не должен использовать больше своего
+// hpack_dyntab_size
+SERVER_TEST("server encoder table size is limited by own table size") {
+  // не 4096, иначе size update не нужен вовсе
+  server.get_options().hpack_dyntab_size = 8192;
+  auto client = co_await fake_client_connection(ioctx, addr);
+  client.set_header_table_size(1 << 30);
+  co_await emulate_client_connection(client);
+
+  std::vector<header> hdrs{
+      {":method", "GET"}, {":path", "/"}, {":scheme", "http"}, {":authority", addr.address().to_string()}};
+  co_await client.send_headers(1, hdrs, /*endstream=*/true);
+  for (;;) {
+    h2test_frame f = co_await client.receive_frame(deadline_after(5s));
+    if (f.hdr.type != frame_e::HEADERS)
+      continue;
+    // https://www.rfc-editor.org/rfc/rfc7541#section-6.3
+    // table size update
+    REQUIRE(!f.data.empty() && (f.data[0] & 0b1110'0000) == 0b0010'0000);
+    const hpack::byte_t* in = f.data.data();
+    REQUIRE(hpack::decode_integer(in, f.data.data() + f.data.size(), 5) ==
+            server.get_options().hpack_dyntab_size);
+    break;
+  }
+}
+
+static std::vector<byte_t> header_table_size_settings(uint32_t size) {
+  std::vector<byte_t> bytes;
+  frame_header{.length = 6, .type = frame_e::SETTINGS, .flags = 0, .streamid = 0}.form(
+      std::back_inserter(bytes));
+  setting_t::form(setting_t{.identifier = SETTINGS_HEADER_TABLE_SIZE, .value = size},
+                  std::back_inserter(bytes));
+  return bytes;
+}
+
+// https://www.rfc-editor.org/rfc/rfc7541#section-4.2
+// если размер таблицы уменьшился и снова вырос между блоками заголовков, кодировщик обязан сначала сообщить
+// наименьший размер: декодер собеседника уменьшает таблицу после ACK и вытесняет записи
+SERVER_TEST("server encoder signals smallest table size after reduce and grow") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+
+  std::vector<header> hdrs{
+      {":method", "GET"}, {":path", "/"}, {":scheme", "http"}, {":authority", addr.address().to_string()},
+      {"x-const", "v"},
+  };
+  // сервер кэширует "x-const" в ответе
+  co_await client.send_headers(1, hdrs, /*endstream=*/true);
+  auto rsp = co_await client.receive_rsp();
+  REQUIRE(std::ranges::find(rsp.headers, header{"x-const", "v"}) != rsp.headers.end());
+
+  co_await client.send_raw_frame(header_table_size_settings(0));
+  co_await client.send_raw_frame(header_table_size_settings(4096));
+  co_await client.receive_settings_ack();
+  co_await client.receive_settings_ack();
+  hpack::dynamic_table_t& table = client.get_inner_connection()->decoder.dyntab;
+  table.set_user_protocol_max_size(0);
+  table.set_user_protocol_max_size(4096);
+
+  // без size update 0 сервер сослался бы на вытесненный у клиента "x-const"
+  co_await client.send_headers(3, hdrs, /*endstream=*/true);
+  rsp = co_await client.receive_rsp();
+  REQUIRE(rsp.streamid == 3);
+  REQUIRE(std::ranges::find(rsp.headers, header{"x-const", "v"}) != rsp.headers.end());
+}
+
 // кодировщик клиента увеличивает таблицу без size update сразу после ACK настроек сервера
 SERVER_TEST("server decoder accepts table grown without size update") {
   server.get_options().hpack_dyntab_size = 64 * 1024;
