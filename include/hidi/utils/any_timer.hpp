@@ -22,7 +22,7 @@ anyany_method2_n(cancel_m, cancel, (&self) requires(self.cancel())->bool);
 
 anyany_method2_n(is_armed_m, is_armed, (const& self) requires(self.is_armed())->bool);
 
-using timer_callback_t = move_only_fn_soos<void(bool /*canceled*/)>;
+using timer_callback_t = move_only_fn<void(bool /*canceled*/)>;
 // if callback.empty do not invokes it
 // never executes callback immediately
 anyany_method2_n(set_timer_callback_m, set_callback,
