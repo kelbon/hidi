@@ -56,6 +56,26 @@ void intrusive_ptr_release(h2stream* p) noexcept {
   }
 }
 
+// декодирует блок до конца, даже если `visitor` бросил исключение: иначе таблица HPACK декодера разойдётся
+// с таблицей собеседника на всё соединение
+template <typename V>
+void decode_headers_block_safe(hpack::decoder& dec, std::span<const byte_t> bytes, V&& visitor) {
+  const byte_t* in = bytes.data();
+  const byte_t* e = in + bytes.size();
+  hpack::header_view header;
+  while (in != e) {
+    dec.decode_header(in, e, header);
+    if (!header)  // dynamic table size update
+      continue;
+    try {
+      visitor(header.name.str(), header.value.str());
+    } catch (...) {
+      hpack::ignore_headers_block(dec, in, e);  // если остаток битый, его ошибка заменит исключение колбека
+      throw;
+    }
+  }
+}
+
 static void validate_trailer_header(std::string_view name, stream_id_t streamid) {
   // https://www.rfc-editor.org/rfc/rfc7540#section-8.1.2.1
   // ( Pseudo-header fields MUST NOT appear in trailers )
@@ -76,7 +96,7 @@ void h2stream::receive_trailers_headers(hpack::decoder& decoder, h2frame frame) 
     throw protocol_error(errc_e::STREAM_CLOSED, "trailers header without END_STREAM | END_HEADERS");
   // до колбеков: memory_queue по нему отличает END_STREAM от обрыва
   end_stream_received = true;
-  hpack::decode_headers_block(decoder, frame.data, [&](std::string_view name, std::string_view value) {
+  decode_headers_block_safe(decoder, frame.data, [&](std::string_view name, std::string_view value) {
     HTTP2_LOG_TRACE(this->logctx(), "name: {}, value: {}", name, value);
     validate_trailer_header(name, frame.header.streamid);
     if (on_header_fn)
@@ -141,7 +161,7 @@ void h2stream::receive_response_headers(hpack::decoder& decoder, h2frame frame) 
   const byte_t* e = in + frame.data.size();
   status = decoder.decode_response_status(in, e);
   // headers must be decoded to maintain HPACK dynamic table in correct state
-  hpack::decode_headers_block(decoder, std::span(in, e), [&](std::string_view name, std::string_view value) {
+  decode_headers_block_safe(decoder, std::span(in, e), [&](std::string_view name, std::string_view value) {
     HTTP2_LOG_TRACE(this->logctx(), "name: {}, value: {}", name, value);
     if (on_header_fn)
       (*on_header_fn)(name, value);

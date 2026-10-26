@@ -277,6 +277,38 @@ CLIENT_TEST("CONNECT rejected without body returns status") {
   co_await server.sync();
 }
 
+// блок заголовков декодируется до конца, даже если on_header бросил исключение: иначе заголовки после
+// исключения не попадут в таблицу HPACK декодера и она разойдётся с таблицей сервера на всё соединение
+CLIENT_TEST("user exception from on_header keeps hpack decoder in sync") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  // сервер кэширует оба заголовка, следующий ответ ссылается на них индексами
+  std::vector<header> hdrs{{":status", "200"}, {"x-first", "1"}, {"x-second", "2"}};
+  auto on_header = [](std::string_view, std::string_view) { throw std::runtime_error("user exception"); };
+  auto h1 = client.send_request(&on_header, nullptr, make_request(client), deadline_after(10s))
+                .start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    h1.destroy();
+  };
+  stream_id_t streamid = (co_await server.receive_req()).streamid;
+  co_await server.send_headers(streamid, hdrs, /*endstream=*/true);
+  co_await wait_until([&] { return h1.done(); }, ioctx);
+  // запрос с исключением пользователя завершается отменой
+  co_await server.receive_rst_stream(streamid, errc_e::CANCEL);
+
+  auto h2 =
+      client.send_request(make_request(client), deadline_after(10s)).start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    h2.destroy();
+  };
+  streamid = (co_await server.receive_req()).streamid;
+  co_await server.send_headers(streamid, hdrs, /*endstream=*/true);
+  co_await wait_until([&] { return h2.done(); }, ioctx);
+  http_response rsp = h2.promise().result_or_rethrow();
+  REQUIRE(std::ranges::find(rsp.headers, http_header_t{"x-first", "1"}) != rsp.headers.end());
+  REQUIRE(std::ranges::find(rsp.headers, http_header_t{"x-second", "2"}) != rsp.headers.end());
+}
+
 // Исключение из on_header завершает задачу запроса, как обычное исключение: задача доходит до конца при
 // любом способе запуска, а клиент не считает запрос активным
 CLIENT_TEST("user exception completes request task") {
