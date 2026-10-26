@@ -38,6 +38,23 @@ struct h2server_options {
   // При превышении соединение закрывается
   uint32_t max_pending_reply_frames = 1000;
   log_context logctx = {};
+
+  // Настройки по умолчанию почти ничего не ограничивают. Эти рассчитаны на недоверенных клиентов: каждый
+  // лимит закрывает способ занять память или потоки сервера одним соединением или множеством соединений
+  // Note: limit_clients_count зависит от ресурсов машины, его стоит подобрать под себя
+  [[nodiscard]] static h2server_options hardened() noexcept {
+    h2server_options o;
+    // кадр читается в память целиком до обработки, иначе один клиент держит до 16 МБ на соединение
+    o.max_receive_frame_size = MIN_MAX_FRAME_LEN;
+    // RFC 9113 рекомендует не меньше 100
+    o.max_concurrent_streams = 100;
+    // тела и заголовки всех запросов одной сессии, которые собираются до вызова обработчика
+    o.limit_requests_memory_usage_bytes = 16 * 1024 * 1024;
+    // блок заголовков целиком (HEADERS + CONTINUATION)
+    o.max_continuation_len_bytes = 64 * 1024;
+    o.limit_clients_count = 10'000;
+    return o;
+  }
 };
 
 }  // namespace hidi

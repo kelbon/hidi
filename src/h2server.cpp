@@ -315,6 +315,10 @@ h2server::h2server(h2server_options options, any_io_context io)
     : m_impl(std::make_unique<h2server::impl>(std::move(io), std::move(options), *this)) {
 }
 
+h2server::h2server(h2server_options options, tcp_connection_options tcpopts)
+    : h2server(std::move(options), make_asio_io_context(std::move(tcpopts))) {
+}
+
 h2server::h2server(server_ssl_context_ptr ctx, h2server_options options, tcp_connection_options tcpopts)
     : h2server(std::move(options), make_asio_tls_io_context(std::move(ctx), std::move(tcpopts))) {
 }
