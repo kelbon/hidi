@@ -20,7 +20,7 @@ CPMAddPackage(
 CPMAddPackage(
   NAME ANYANY
   GIT_REPOSITORY https://github.com/kelbon/AnyAny
-  GIT_TAG v1.2.2
+  GIT_TAG v1.3.0
   OPTIONS "AA_ENABLE_TESTING OFF"
 )
 
@@ -39,7 +39,7 @@ unset(BOOST_INCLUDE_LIBRARIES)
 CPMAddPackage(
   NAME HPACK
   GITHUB_REPOSITORY kelbon/HPACK
-  GIT_TAG         v1.1.4
+  GIT_TAG         v1.2.0
   OPTIONS "HPACK_ENABLE_TESTING OFF"
           "HPACK_USE_CPM OFF"
 )
