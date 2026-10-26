@@ -317,9 +317,7 @@ static protocol_error duplicated_pseudoheader(std::string_view name) {
                         std::format("pseudoheader {} appeared on the list twice", name));
 }
 
-// возвращает ошибку строкой
-static std::optional<std::string> validate_header_name(const hpack::header_view& h) {
-  std::string_view str = h.name.str();
+std::optional<std::string> validate_header_name(std::string_view str, std::string_view value) {
   // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.1-3.1
   for (unsigned char c : str) {
     switch (c) {
@@ -330,7 +328,7 @@ static std::optional<std::string> validate_header_name(const hpack::header_view&
       case 0x7f ... 0xff:
       case ':':
         // websocket, handled here for better hot path
-        if (h.name != ":protocol") {
+        if (str != ":protocol") {
           return std::format("forbidden character 0x{:x} in header name \"{}\")", c, str);
         }
     }
@@ -344,8 +342,8 @@ static std::optional<std::string> validate_header_name(const hpack::header_view&
     // https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.2-2
     if (str != "te")
       return std::format("connection specific header forbidden in HTTP/2, header name: {}", str);
-    if (h.value.str() != "trailers")
-      return std::format("TE header with value other than \"trailers\", actual value: {}", h.value.str());
+    if (value != "trailers")
+      return std::format("TE header with value other than \"trailers\", actual value: {}", value);
   }
   return std::nullopt;
 }
@@ -428,7 +426,7 @@ void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> byt
     if (!header)
       continue;
   push_header:
-    if (std::optional<std::string> err = validate_header_name(header)) {
+    if (std::optional<std::string> err = validate_header_name(header.name.str(), header.value.str())) {
       hpack::ignore_headers_block(d, in, e);
       throw stream_error(errc_e::PROTOCOL_ERROR, s.streamid, std::move(*err));
     }

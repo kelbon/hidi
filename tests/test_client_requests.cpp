@@ -309,6 +309,54 @@ CLIENT_TEST("user exception from on_header keeps hpack decoder in sync") {
   REQUIRE(std::ranges::find(rsp.headers, http_header_t{"x-second", "2"}) != rsp.headers.end());
 }
 
+// https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1
+// некорректный ответ - ошибка стрима: запрос завершается исключением, соединение продолжает работать
+CLIENT_TEST("malformed response headers is stream error") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  std::vector<header> hdrs{{":status", "200"}};
+  SECTION("uppercase name") {
+    hdrs.push_back({"X-Upper", "1"});
+  }
+  SECTION("pseudoheader after :status") {
+    hdrs.push_back({":path", "/"});
+  }
+  SECTION("connection-specific header") {
+    hdrs.push_back({"connection", "keep-alive"});
+  }
+  hdrs.push_back({"x-after", "2"});
+
+  auto h1 =
+      client.send_request(make_request(client), deadline_after(10s)).start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    h1.destroy();
+  };
+  stream_id_t streamid = (co_await server.receive_req()).streamid;
+  co_await server.send_headers(streamid, hdrs, /*endstream=*/true);
+  co_await wait_until([&] { return h1.done(); }, ioctx);
+  bool stream_error_thrown = false;
+  try {
+    (void)h1.promise().result_or_rethrow();
+  } catch (stream_error&) {
+    stream_error_thrown = true;
+  }
+  REQUIRE(stream_error_thrown);
+  co_await server.receive_rst_stream(streamid, errc_e::CANCEL);
+
+  // соединение живо, таблица HPACK не разошлась ("x-after" закэширован после некорректного заголовка)
+  auto h2 =
+      client.send_request(make_request(client), deadline_after(10s)).start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    h2.destroy();
+  };
+  streamid = (co_await server.receive_req()).streamid;
+  std::vector<header> ok{{":status", "200"}, {"x-after", "2"}};
+  co_await server.send_headers(streamid, ok, /*endstream=*/true);
+  co_await wait_until([&] { return h2.done(); }, ioctx);
+  http_response rsp = h2.promise().result_or_rethrow();
+  REQUIRE(std::ranges::find(rsp.headers, http_header_t{"x-after", "2"}) != rsp.headers.end());
+}
+
 // Исключение из on_header завершает задачу запроса, как обычное исключение: задача доходит до конца при
 // любом способе запуска, а клиент не считает запрос активным
 CLIENT_TEST("user exception completes request task") {

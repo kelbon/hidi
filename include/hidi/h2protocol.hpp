@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include <hpack/hpack.hpp>
@@ -574,6 +575,10 @@ inline void strip_padding(std::span<byte_t>& bytes) {
 }
 
 struct h2stream;
+
+// проверяет имя заголовка (и значение te) по https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2,
+// возвращает ошибку строкой. Псевдозаголовки, кроме :protocol, считаются ошибкой
+std::optional<std::string> validate_header_name(std::string_view name, std::string_view value);
 
 // разбирает все пришедшие хедера, обрабатывая некорретные значения :path,
 // дублированные или пропущенные псевдохедеры
