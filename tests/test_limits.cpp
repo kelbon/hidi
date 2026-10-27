@@ -8,11 +8,7 @@
 
 using namespace hidi;
 
-static server_ssl_context_ptr test_ssl_ctx() {
-  return make_ssl_context_for_server(HTTP2_TLS_DIR "/test_server.crt", HTTP2_TLS_DIR "/test_server.key");
-}
-
-SERVER_TEST("server bytes limit", test_ssl_ctx()) {
+SERVER_TEST("server bytes limit") {
   constexpr size_t LIMIT = 1000;
   // set options before client connection
   server.get_options().limit_requests_memory_usage_bytes = LIMIT;
@@ -120,7 +116,7 @@ SERVER_TEST("server bytes limit", test_ssl_ctx()) {
   }
 }
 
-SERVER_TEST("server sessions limit", test_ssl_ctx()) {
+SERVER_TEST("server sessions limit") {
   server.get_options().limit_clients_count = 0;
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await client.send_client_magic();
@@ -132,7 +128,7 @@ SERVER_TEST("server sessions limit", test_ssl_ctx()) {
   co_await client.wait_connection_dropped(deadline_after(1s));
 }
 
-SERVER_TEST("server CONTINUATION limit", test_ssl_ctx()) {
+SERVER_TEST("server CONTINUATION limit") {
   constexpr size_t LIMIT = 100;
   server.get_options().max_continuation_len_bytes = LIMIT;
   auto client = co_await fake_client_connection(ioctx, addr);
@@ -253,7 +249,8 @@ SERVER_TEST("big requests") {
     client.send_req(id, std::move(hdrs), std::move(bytes)).start_and_detach();
     id += 2;
   }
-  std::unordered_map rsps = co_await client.receive_streams(COUNT);
+  // ~10 МБ в каждую сторону: с TLS под санитайзерами это не укладывается в 5 секунд по умолчанию
+  std::unordered_map rsps = co_await client.receive_streams(COUNT, deadline_after(25s));
   for (auto& [streamid, rsp] : rsps)
     REQUIRE(std::hash<std::string_view>{}(rsp.body_strview()) == expected_hashs[streamid]);
 }

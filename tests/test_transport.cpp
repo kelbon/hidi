@@ -132,12 +132,8 @@ TRANSPORT_TEST("client TLS handshake is interrupted by shutdown") {
   co_await wait_until([&] { return shutdown_done; }, *&ioctx);
 }
 
-static server_ssl_context_ptr test_ssl_ctx() {
-  return make_ssl_context_for_server(HTTP2_TLS_DIR "/test_server.crt", HTTP2_TLS_DIR "/test_server.key");
-}
-
 // клиент открыл TCP соединение и молчит. Это не должно мешать серверу принимать других клиентов
-SERVER_TEST("silent TCP connection does not block accept", test_ssl_ctx()) {
+SERVER_TEST("silent TCP connection does not block accept") {
   boost::asio::io_context rawio;
   boost::asio::ip::tcp::socket silent(rawio);
   // соединение попадает в очередь listen, даже пока сервер не вызвал accept
@@ -148,7 +144,7 @@ SERVER_TEST("silent TCP connection does not block accept", test_ssl_ctx()) {
 }
 
 // молчащее соединение закрывается по connection_timeout, в том числе посреди TLS handshake
-SERVER_TEST("silent TCP connection is dropped by connection timeout", test_ssl_ctx()) {
+SERVER_TEST("silent TCP connection is dropped by connection timeout") {
   server.get_options().connection_timeout = std::chrono::milliseconds(100);
   boost::asio::io_context rawio;
   boost::asio::ip::tcp::socket silent(rawio);
@@ -185,7 +181,7 @@ static dd::task<std::string> alpn_selected_by_server(any_io_context& io, interne
 }
 
 // сервер выбирает h2, если клиент его предлагает, и не отклоняет клиентов без h2
-SERVER_TEST("ALPN", test_ssl_ctx()) {
+SERVER_TEST("ALPN") {
   if (!is_tls_server)
     co_return;
   SECTION("h2 offered") {
@@ -258,7 +254,7 @@ TRANSPORT_TEST("write under backpressure") {
   a.listen();
   any_connection_t reader;
   bool accepted = false;
-  accept_raw(a, tls ? test_ssl_ctx().p : nullptr, reader, accepted).start_and_detach();
+  accept_raw(a, tls ? test_server_ssl_ctx().p : nullptr, reader, accepted).start_and_detach();
   any_connection_t writer = co_await ioctx.create_connection_client({a.local_endpoint()}, deadline_after(5s));
   {
     io_error_code ec;
@@ -314,7 +310,7 @@ TRANSPORT_TEST("client sends SNI") {
     target = endpoint(a.local_endpoint());
     expected = "";
   }
-  ssl_context_ptr server_sslctx = test_ssl_ctx().p;
+  ssl_context_ptr server_sslctx = test_server_ssl_ctx().p;
   std::string sni = "not set";
   bool done = false;
   accept_and_get_sni(a, server_sslctx->ctx, sni, done).start_and_detach();
@@ -367,8 +363,10 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
   SECTION("TLS") {
     tls = true;
   }
-  any_io_context ioctx = tls ? make_asio_tls_io_context(rawio, test_ssl_ctx()) : make_asio_io_context(rawio);
-  any_io_context target = tls ? make_asio_tls_io_context(other, test_ssl_ctx()) : make_asio_io_context(other);
+  any_io_context ioctx =
+      tls ? make_asio_tls_io_context(rawio, test_server_ssl_ctx()) : make_asio_io_context(rawio);
+  any_io_context target =
+      tls ? make_asio_tls_io_context(other, test_server_ssl_ctx()) : make_asio_io_context(other);
   any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true);
   a.listen();
   any_io_context plain = make_asio_io_context(rawio);
