@@ -17,8 +17,9 @@ struct memory_queue {
   bytes_t bytes;
   std::coroutine_handle<> waiter = nullptr;
   stream_ptr n = nullptr;
-  bool eof = false;          // true if last data frame was received
-  bool aborted_eof = false;  // см. `aborted`
+  // прочитано пользователем, но ещё не возвращено собеседнику через WINDOW_UPDATE
+  uint32_t read_not_credited = 0;
+  bool eof = false;  // true if last data frame was received
   ZAL_PIN;
 
   struct data_awaiter {
@@ -38,6 +39,8 @@ struct memory_queue {
     }
   };
 
+  void on_data_read(size_t n) noexcept;
+
  public:
   // creates memory queue associated with `n`, it will receive all data for `n`
   explicit memory_queue(h2stream& n) noexcept;
@@ -49,9 +52,7 @@ struct memory_queue {
 
   // returns empty bytes if no data available
   // returns by copy to avoid invalidate after `push_data`
-  [[nodiscard]] bytes_t poll_data() noexcept {
-    return std::move(bytes);
-  }
+  [[nodiscard]] bytes_t poll_data() noexcept;
 
   // returns awaiters
   // await returns empty data only in case EOF
@@ -67,9 +68,7 @@ struct memory_queue {
   // true, если данные оборваны: стрим завершился без END_STREAM от собеседника (RST_STREAM, разрыв
   // соединения, таймаут, отмена). Тогда EOF не нормальный конец данных, и канал может закрыть свою сторону
   // аварийно (например RST вместо FIN у сокета, в который он перекладывает данные)
-  [[nodiscard]] bool aborted() const noexcept {
-    return aborted_eof;
-  }
+  [[nodiscard]] bool aborted() const noexcept;
 
   // for using with function ref
   void operator()(std::span<const byte_t> b, bool lastframe);

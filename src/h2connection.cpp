@@ -189,9 +189,7 @@ void h2stream::receive_response_data(h2frame frame) {
   assert(frame.header.type == frame_e::DATA);
   // до колбека: memory_queue по нему отличает END_STREAM от обрыва
   end_stream_received = frame.header.flags & flags::END_STREAM;
-  decrease_window_size(rl_streamlevel_windowsize, int32_t(frame.header.length), logctx());
-  if (rl_streamlevel_windowsize < MAX_WINDOW_SIZE / 2 && !(frame.header.flags & flags::END_STREAM))
-    update_window_to_max(stream_ptr(this), connection).start_and_detach();
+  count_received_data(frame);
 
   if (on_data_part_fn)
     (*on_data_part_fn)(frame.data, (frame.header.flags & flags::END_STREAM));
@@ -231,9 +229,7 @@ void h2stream::receive_request_data(h2frame frame) {
   HTTP2_LOG_TRACE(logctx(), "received DATA: stream: {}, len: {}, DATA: {}", streamid, frame.header.length,
                   std::string_view((const char*)frame.data.data(), frame.data.size()));
 
-  decrease_window_size(rl_streamlevel_windowsize, int32_t(frame.header.length), logctx());
-  if (rl_streamlevel_windowsize < MAX_WINDOW_SIZE / 2 && !(frame.header.flags & flags::END_STREAM))
-    update_window_to_max(stream_ptr(this), connection).start_and_detach();
+  count_received_data(frame);
 
   if (is_half_closed())
     throw stream_error(errc_e::STREAM_CLOSED, streamid, "stream already assembled");
@@ -250,6 +246,21 @@ void h2stream::receive_request_data(h2frame frame) {
     end_stream_received = frame.header.flags & flags::END_STREAM;
     (*on_data_part_fn)(frame.data, frame.header.flags& flags::END_STREAM);
   }
+}
+
+void h2stream::count_received_data(const h2frame& frame) {
+  // Note: frame.header.length включает паддинг, он тоже учитывается в окне
+  decrease_window_size(rl_streamlevel_windowsize, int32_t(frame.header.length), logctx());
+  if (rl_streamlevel_windowsize < 0) [[unlikely]] {
+    // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.1
+    throw stream_error(errc_e::FLOW_CONTROL_ERROR, streamid,
+                       std::format("DATA exceeds stream window by {} bytes", -rl_streamlevel_windowsize));
+  }
+  if (has_memory_queue() || (frame.header.flags & flags::END_STREAM))
+    return;
+  cfint_t window = connection->local_settings.initial_stream_window_size;
+  if (rl_streamlevel_windowsize < window / 2)
+    update_window_to_max(stream_ptr(this), connection, window).start_and_detach();
 }
 
 const log_context& h2stream::logctx() const noexcept {
@@ -375,7 +386,7 @@ void h2connection::finish_request(h2stream& node, int status, bool send_rst) noe
   node.status = status;
   stream_ptr p = &node;  // hold node
   auto t = std::exchange(node.task, nullptr);
-  if (node.is_connect_request() && node.on_data_part_fn) {
+  if (node.has_memory_queue()) {
     // канал CONNECT читает данные из memory_queue и иначе ждал бы их вечно
     (*node.on_data_part_fn)({}, /*last chunk*/ true);
   }
@@ -402,7 +413,7 @@ void h2connection::cancel_request(h2stream& node) noexcept {
   node.task = nullptr;
   // колбеки могли жить в уничтоженной корутине
   node.on_header_fn = nullptr;
-  if (node.is_connect_request() && node.on_data_part_fn) {
+  if (node.has_memory_queue()) {
     // данные CONNECT читает канал пользователя из memory_queue, будим его, чтобы он не ждал вечно
     (*node.on_data_part_fn)({}, /*last chunk*/ true);
   } else {

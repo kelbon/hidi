@@ -37,6 +37,9 @@ struct h2server_options {
   // копятся в памяти
   // При превышении соединение закрывается
   uint32_t max_pending_reply_frames = 1000;
+  // SETTINGS_INITIAL_WINDOW_SIZE: сколько байт тела собеседник может прислать в стрим без подтверждения
+  // Note: ограничивает скорость одного стрима величиной окно / RTT
+  uint32_t stream_window_size = MAX_WINDOW_SIZE;
   log_context logctx = {};
 
   // Настройки по умолчанию почти ничего не ограничивают. Эти рассчитаны на недоверенных клиентов: каждый
@@ -53,6 +56,7 @@ struct h2server_options {
     // блок заголовков целиком (HEADERS + CONTINUATION)
     o.max_continuation_len_bytes = 64 * 1024;
     o.limit_clients_count = 10'000;
+    o.stream_window_size = 1024 * 1024;
     return o;
   }
 };

@@ -131,25 +131,26 @@ dd::task<bool> send_window_update(h2connection_ptr con, stream_id_t id, uint32_t
   co_return !ec;
 }
 
-dd::task<void> update_window_to_max(stream_ptr node, h2connection_ptr con) try {
+dd::task<void> update_window_to_max(stream_ptr node, h2connection_ptr con, cfint_t max) try {
   assert(con);
   stream_id_t streamid = node ? node->streamid : 0;
   cfint_t& size = node ? node->rl_streamlevel_windowsize : con->my_window_size;
   // its possible to have < 0 in such cases like
   // * sending DATA before settings exchange
   // * updating settings value SETTINGS_INITIAL_WINDOW_SIZE
+  assert(max > 0 && max <= MAX_WINDOW_SIZE);
   while (size < 0) {
     // если запись не удалась, соединение уже не рабочее и размер окна не важен
-    increment_window_size_trusted(size, MAX_WINDOW_SIZE);
-    if (!co_await send_window_update(con, streamid, MAX_WINDOW_SIZE))
+    increment_window_size_trusted(size, int32_t(max));
+    if (!co_await send_window_update(con, streamid, uint32_t(max)))
       co_return;
 
     if (con->is_dropped())
       co_return;
   }
-  if (size != MAX_WINDOW_SIZE) [[likely]] {
+  if (size < max) [[likely]] {
     static_assert(std::numeric_limits<uint32_t>::max() > MAX_WINDOW_SIZE);
-    uint32_t inc = uint32_t(MAX_WINDOW_SIZE - size);
+    uint32_t inc = uint32_t(max - size);
     increment_window_size_trusted(size, int32_t(inc));
     (void)co_await send_window_update(con, streamid, inc);
   }

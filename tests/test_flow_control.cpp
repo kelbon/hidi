@@ -113,5 +113,105 @@ CLIENT_TEST("blocked request body resumes when window grows") {
   REQUIRE(h.promise().result_or_rethrow().status == 200);
 }
 
+static streaming_body_t empty_body(request_context) {
+  co_return;
+}
+
+// потоковый обработчик, который начинает читать тело только по команде теста
+struct slow_reader_server : h2server {
+  using h2server::h2server;
+  bool start_reading = false;
+  size_t read_bytes = 0;
+
+  bool answer_before_data(const http_request&) const noexcept override {
+    return true;
+  }
+  dd::task<std::pair<http_response, bistream_body_maker_t>> handle_request_stream(http_request,
+                                                                                  memory_queue_ptr q,
+                                                                                  request_context) override {
+    while (!start_reading)
+      co_await yield_on_ioctx(*&ioctx());
+    for (;;) {
+      bytes_t chunk = co_await q->next_chunk();
+      if (chunk.empty())
+        break;
+      read_bytes += chunk.size();
+    }
+    co_return {http_response{.status = 200}, &empty_body};
+  }
+  dd::task<http_response> handle_request(http_request, request_context) override {
+    co_return http_response{.status = 200};
+  }
+};
+
+// окно стрима минимально возможное, чтобы его легко было исчерпать
+constexpr inline uint32_t SLOW_READER_WINDOW = 65'535;
+
+static dd::task<test_h2connection> start_streaming_request(internet_address addr, any_io_context_ref ioctx) {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  std::vector<header> hdrs{
+      {":method", "POST"},
+      {":path", "/"},
+      {":scheme", "http"},
+      {":authority", addr.address().to_string()},
+  };
+  co_await client.send_headers(1, std::move(hdrs), /*endstream=*/false);
+  // исчерпывает окно стрима
+  co_await client.send_data(1, std::string(SLOW_READER_WINDOW, 'a'), /*end_stream=*/false);
+  co_return client;
+}
+
+static dd::task<void> unread_body_limited_body(slow_reader_server& server, internet_address addr,
+                                               any_io_context_ref ioctx) {
+  auto client = co_await start_streaming_request(addr, ioctx);
+  // обработчик не читает, поэтому окно не возвращено и лишний байт нарушает его
+  co_await client.send_data(1, "b", /*end_stream=*/true);
+  co_await client.receive_rst_stream(1, errc_e::FLOW_CONTROL_ERROR);
+  REQUIRE(server.read_bytes == 0);
+  // иначе обработчик ждёт вечно и сервер не остановится
+  server.start_reading = true;
+}
+
+static dd::task<void> read_returns_window_body(slow_reader_server& server, internet_address addr,
+                                               any_io_context_ref ioctx) {
+  auto client = co_await start_streaming_request(addr, ioctx);
+  server.start_reading = true;
+  for (;;) {
+    h2test_frame f = co_await client.receive_frame(deadline_after(5s));
+    if (f.hdr.type == frame_e::WINDOW_UPDATE && f.hdr.streamid == 1)
+      break;
+  }
+  co_await client.send_data(1, "b", /*end_stream=*/true);
+  auto rsp = co_await client.receive_rsp();
+  REQUIRE(rsp.find_hdr(":status") == "200");
+  REQUIRE(server.read_bytes == SLOW_READER_WINDOW + 1);
+}
+
+static void run_slow_reader_test(std::string_view name,
+                                 dd::task<void> (*body)(slow_reader_server&, internet_address,
+                                                        any_io_context_ref)) {
+  slow_reader_server server(h2server_options{.stream_window_size = SLOW_READER_WINDOW},
+                            make_asio_io_context());
+  internet_address addr(asio::ip::address_v4::loopback(), 0);
+  addr = server.listen({.addr = addr, .reuse_address = true});
+  bool ended = false;
+  std::exception_ptr ex;
+  (void)run_test(name, body(server, addr, *&server.ioctx()), ended, ex);
+  fuzzing::fuzzer fuz(moko3::get_testbox().randg());
+  fuz.run_until(deadline_after(moko3::get_testbox().test_timeout(name)), ended, server.ioctx());
+  if (ex)
+    std::rethrow_exception(std::move(ex));
+}
+
+// непрочитанное потоковое тело не может превысить окно стрима: окно возвращается только по мере чтения
+TEST("unread streaming body is limited by stream window") {
+  run_slow_reader_test("unread streaming body is limited by stream window", &unread_body_limited_body);
+}
+
+TEST("reading streaming body returns stream window") {
+  run_slow_reader_test("reading streaming body returns stream window", &read_returns_window_body);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;
