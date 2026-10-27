@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include "hidi/h2protocol.hpp"
 #include "hidi/utils/deadline.hpp"
 #include "hidi/utils/unique_name.hpp"
 
@@ -30,6 +31,9 @@ struct h2client_options {
   // копятся в памяти
   // При превышении соединение закрывается
   uint32_t max_pending_reply_frames = 1000;
+  // SETTINGS_INITIAL_WINDOW_SIZE: сколько байт тела собеседник может прислать в стрим без подтверждения
+  // Note: ограничивает скорость одного стрима величиной окно / RTT
+  uint32_t stream_window_size = MAX_WINDOW_SIZE;
   log_context logctx = {};
 };
 

@@ -131,10 +131,23 @@ struct h2stream {
   stream_body_maker_t makebody;
   // ignored for server streaming nodes (websocket etc, exchanging bytes)
   size_t used_bytes = 0;  // used only by server
+  // Note: УЗЛЫ ПЕРЕИСПОЛЬЗУЮТСЯ! Добавляешь поле? Посмотри на `h2connection::new_stream_node`!!!
   ZAL_PIN;
+
+  // учитывает принятый DATA в окне стрима. Бросает stream_error, если собеседник превысил окно
+  void count_received_data(const h2frame& frame);
 
   // returns false if not allowed to use 'n' bytes
   [[nodiscard]] bool use_bytes(size_t n) noexcept;
+
+  // если есть, то она управляет control flow
+  [[nodiscard]] bool has_memory_queue() const noexcept {
+    // на клиенте memory_queue создаётся только для CONNECT запросов
+    // на сервере только после answered_before_data == true
+    // сама очередь выставляет при создании on_data_part_fn
+    // пользователь может накосячить и разрушить её до окончания стрима, но в деструкторе on_data_part_fn = 0
+    return on_data_part_fn && (is_connect_request() || answered_before_data);
+  }
 
   // connect request returns before END_STREAM when first HEADERS received and not send :path and :authority
   // client-side

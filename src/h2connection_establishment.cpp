@@ -29,6 +29,12 @@ static void validate_first_server_frame_header(const frame_header& header, const
   validate_first_settings_len(header);
 }
 
+// до подтверждения наших SETTINGS собеседник считает окно стрима равным значению по умолчанию (65'535),
+// окно меньше этого он мог бы превысить, не нарушая протокол
+static uint32_t stream_window_size(uint32_t requested) noexcept {
+  return std::clamp<uint32_t>(requested, settings_t{}.initial_stream_window_size, MAX_WINDOW_SIZE);
+}
+
 static void validate_client_magic(std::span<byte_t> magic, const log_context& logctx) {
   if (!std::ranges::equal(magic, std::span(CONNECTION_PREFACE))) {
     HTTP2_LOG(logctx, ERROR, "invalid client magic, expected: {}, received: {}",
@@ -54,7 +60,7 @@ dd::task<h2connection_ptr> establish_http2_session_client(h2connection_ptr con, 
   con->local_settings = settings_t{
       .header_table_size = options.force_disable_hpack ? 0 : options.hpack_dyntab_size,
       .enable_push = false,
-      .initial_stream_window_size = MAX_WINDOW_SIZE,
+      .initial_stream_window_size = stream_window_size(options.stream_window_size),
       // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5.2-2.10.2
       .max_frame_size = std::max(options.max_receive_frame_size, MIN_MAX_FRAME_LEN),
       .deprecated_priority_disabled = true,
@@ -194,7 +200,7 @@ dd::task<h2connection_ptr> establish_http2_session_server(h2connection_ptr con, 
   con->local_settings.header_table_size = options.force_disable_hpack ? 0 : options.hpack_dyntab_size;
   con->local_settings.max_concurrent_streams =
       std::clamp(options.max_concurrent_streams, {1}, settings_t::MAX_MAX_CONCURRENT_STREAMS);
-  con->local_settings.initial_stream_window_size = MAX_WINDOW_SIZE;
+  con->local_settings.initial_stream_window_size = stream_window_size(options.stream_window_size);
   // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5.2-2.10.2
   con->local_settings.max_frame_size = std::max(options.max_receive_frame_size, MIN_MAX_FRAME_LEN);
   con->local_settings.enable_connect_protocol = options.supports_websocket;
