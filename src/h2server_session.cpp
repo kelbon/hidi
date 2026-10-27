@@ -192,7 +192,9 @@ bool h2server_session::rst_stream_server(rst_stream rstframe, bool skip_validati
       return false;
   }
   n->canceled_by_rststream = true;
-  finish_server_request(*n);
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-5.4.2-5 на RST_STREAM нельзя отвечать RST_STREAM
+  // После своей ошибки стрима RST_STREAM с её кодом отправляет rst_stream_after_error
+  finish_server_request(*n, /*send_rst=*/false);
   return true;
 }
 
@@ -350,7 +352,7 @@ void h2server_session::client_requests_graceful_shutdown(goaway_frame f) {
   // drop connection)
 }
 
-void h2server_session::finish_server_request(h2stream& n) noexcept {
+void h2server_session::finish_server_request(h2stream& n, bool send_rst) noexcept {
   if (n.on_data_part_fn) {
     // prevent endless waiting if client does not send anything etc
     (*n.on_data_part_fn)({}, /*last chunk*/ true);
@@ -365,7 +367,7 @@ void h2server_session::finish_server_request(h2stream& n) noexcept {
     on_response_done();
   } else {
     bool orphan = !n.task;
-    connection->finish_request(n, reqerr_e::CANCELLED);
+    connection->finish_request(n, reqerr_e::CANCELLED, send_rst);
     if (orphan)
       on_response_done();
   }

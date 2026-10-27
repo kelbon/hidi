@@ -154,7 +154,7 @@ struct h2server_session : bi::list_base_hook<bi::link_mode<bi::safe_link>> {
   // завершает запрос независимо от того собран он уже или нет
   // Вызывается для нештатного завершения,
   // для успешного завершения писатель вызывает connection.finish_request
-  void finish_server_request(h2stream&) noexcept;
+  void finish_server_request(h2stream&, bool send_rst = true) noexcept;
 
   const log_context& logctx() const noexcept {
     return connection->logctx;
