@@ -213,5 +213,30 @@ TEST("reading streaming body returns stream window") {
   run_slow_reader_test("reading streaming body returns stream window", &read_returns_window_body);
 }
 
+// Клиент не читает ответ на стрим 1, и окно этого стрима (65'535 по умолчанию) исчерпано. Ответ на стрим 3
+// всё равно приходит: писатель сервера не ждёт окна одного стрима
+SERVER_TEST("exhausted window of one stream does not block other streams") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  // клиент ставит окно стримов 65'535 по умолчанию
+  co_await emulate_client_connection(client);
+  // окно соединения не ограничивает, только окно стрима
+  co_await client.send_window_size_increment(0, 1 << 30);
+  std::vector<header> hdrs{
+      {":method", "POST"},
+      {":path", "/"},
+      {":scheme", "http"},
+      {":authority", addr.address().to_string()},
+  };
+  // эхо сервер пытается отправить в окно клиента 200'000 байт
+  co_await client.send_req(1, hdrs, http_body_bytes(200'000, byte_t('a')));
+  co_await client.send_req(3, hdrs, http_body_bytes(10, byte_t('b')));
+  for (;;) {
+    h2test_frame f = co_await client.receive_frame(deadline_after(5s));
+    if (f.hdr.streamid == 3 && f.hdr.type == frame_e::DATA && (f.hdr.flags & flags::END_STREAM))
+      break;
+  }
+  // ответ 200'000 игнорируется
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;
