@@ -17,7 +17,7 @@ static dd::task<void> write_until_error(any_connection_t& con, io_error_code& ec
 }
 
 // пир не читает, поэтому начатая запись никогда не завершится. shutdown не должен её ждать
-// (с буферизацией ждёт отправки принятого, но не дольше buffered_writer::DRAIN_TIMEOUT)
+// (с буферизацией ждёт отправки принятого, но не дольше buffered_connection::DRAIN_TIMEOUT)
 TRANSPORT_TEST("shutdown does not wait for blocked write") {
   bool buffer_writes = GENERATE(false, true);
   any_io_context ioctx = make_asio_io_context(rawio, tcp_connection_options{.buffer_writes = buffer_writes});
