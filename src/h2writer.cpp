@@ -182,15 +182,15 @@ static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, writer_c
                     work->streamid, framelen, std::distance(in, data_end), con->receiver_window_size,
                     work->lr_streamlevel_windowsize, con->remote_settings.max_frame_size,
                     std::string_view((const char*)in, framelen));
+    // окно уменьшается до записи
+    decrease_window_size(con->receiver_window_size, framelen, con->logctx);           // connection
+    decrease_window_size(work->lr_streamlevel_windowsize, framelen, work->logctx());  // stream
     // send frame
     HIDI_WAIT_WRITE(*con);
     co_await con->write(std::span(in - H2FHL, framelen + H2FHL), ec);
 
     if (ec)
       co_return;
-    // control flow
-    decrease_window_size(con->receiver_window_size, framelen, con->logctx);           // connection
-    decrease_window_size(work->lr_streamlevel_windowsize, framelen, work->logctx());  // stream
   }  // end loop
   HTTP2_LOG_TRACE(con->logctx, "DATA for stream {} successfully sended", work->streamid);
   co_return;
