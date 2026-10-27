@@ -30,7 +30,7 @@ struct h2client_options {
   // WINDOW_UPDATE), может одновременно ждать записи. Если сервер шлёт такие кадры, но не читает ответы, они
   // копятся в памяти
   // При превышении соединение закрывается
-  uint32_t max_pending_reply_frames = 1000;
+  uint32_t max_pending_reply_frames = uint32_t(-1);
   // SETTINGS_INITIAL_WINDOW_SIZE: сколько байт тела собеседник может прислать в стрим без подтверждения
   // Note: ограничивает скорость одного стрима величиной окно / RTT
   uint32_t stream_window_size = MAX_WINDOW_SIZE;
