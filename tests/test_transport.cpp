@@ -26,7 +26,11 @@ TRANSPORT_TEST("shutdown does not wait for blocked write") {
   any_connection_t peer =
       co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
   io_error_code ec;
+  co_await peer->handshake(ec, /*is_client=*/true);
+  REQUIRE(!ec);
   any_connection_t con = co_await a.accept(ec);
+  REQUIRE(!ec);
+  co_await con->handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
 
   io_error_code write_ec;
@@ -102,18 +106,30 @@ TRANSPORT_TEST("timer callback rearms and replaces itself") {
   }
 }
 
-TRANSPORT_TEST("client TLS handshake respects deadline") {
+static dd::job shutdown_connection(any_connection_t& con, bool& done) {
+  co_await con->shutdown();
+  done = true;
+}
+
+// сервер принял TCP соединение, но не отвечает на TLS handshake. Клиентский handshake прерывается через
+// shutdown (так его прерывают таймаут соединения и graceful_stop клиента)
+TRANSPORT_TEST("client TLS handshake is interrupted by shutdown") {
   any_io_context ioctx = make_asio_tls_io_context(rawio, make_ssl_context_for_client({}));
   boost::asio::ip::tcp::acceptor silent(rawio, localhost());
   silent.listen();
-  bool timeout = false;
-  try {
-    (void)co_await ioctx.create_connection_client({silent.local_endpoint()},
-                                                  deadline_after(std::chrono::milliseconds(200)));
-  } catch (timeout_exception&) {
-    timeout = true;
-  }
-  REQUIRE(timeout);
+  any_connection_t con =
+      co_await ioctx.create_connection_client({silent.local_endpoint()}, deadline_after(5s));
+  bool shutdown_done = false;
+  any_timer timer = ioctx.create_timer();
+  timer.set_callback([&](bool canceled) {
+    if (!canceled)
+      (void)shutdown_connection(con, shutdown_done);
+  });
+  timer.arm(std::chrono::milliseconds(100));
+  io_error_code ec;
+  co_await con->handshake(ec, /*is_client=*/true);
+  REQUIRE(ec);
+  co_await wait_until([&] { return shutdown_done; }, *&ioctx);
 }
 
 static server_ssl_context_ptr test_ssl_ctx() {
@@ -219,7 +235,7 @@ static dd::task<void> accept_raw(boost::asio::ip::tcp::acceptor& a, ssl_context_
     out.reset(new asio_tls_connection(std::move(sock), std::move(sslctx)));
   else
     out.reset(new asio_connection(std::move(sock)));
-  co_await out->handshake(ec);
+  co_await out->handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
   done = true;
 }
@@ -244,6 +260,11 @@ TRANSPORT_TEST("write under backpressure") {
   bool accepted = false;
   accept_raw(a, tls ? test_ssl_ctx().p : nullptr, reader, accepted).start_and_detach();
   any_connection_t writer = co_await ioctx.create_connection_client({a.local_endpoint()}, deadline_after(5s));
+  {
+    io_error_code ec;
+    co_await writer->handshake(ec, /*is_client=*/true);
+    REQUIRE(!ec);
+  }
   while (!accepted)
     co_await net.sleep(rawio, std::chrono::milliseconds(1));
 
@@ -298,6 +319,9 @@ TRANSPORT_TEST("client sends SNI") {
   bool done = false;
   accept_and_get_sni(a, server_sslctx->ctx, sni, done).start_and_detach();
   any_connection_t con = co_await ioctx.create_connection_client({target}, deadline_after(5s));
+  io_error_code ec;
+  co_await con->handshake(ec, /*is_client=*/true);
+  REQUIRE(!ec);
   while (!done)
     co_await net.sleep(rawio, std::chrono::milliseconds(1));
   REQUIRE(sni == expected);

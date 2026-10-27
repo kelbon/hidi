@@ -162,6 +162,13 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
       on_scope_exit {
         self->m_notYetReadyConnection = nullptr;
       };
+      {
+        // TLS handshake после m_notYetReadyConnection: его прерывают таймер выше и graceful_stop
+        io_error_code ec;
+        co_await con->tcpcon->handshake(ec, /*is_client=*/true);
+        if (ec)
+          throw network_exception("[TCP/SSL] cannot ssl handshake: {}", ec.message());
+      }
       new_connection = co_await establish_http2_session_client(std::move(con), self->m_options);
       timer.cancel();
     }
