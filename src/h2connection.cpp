@@ -234,6 +234,9 @@ void h2stream::receive_request_data(h2frame frame) {
   if (is_half_closed())
     throw stream_error(errc_e::STREAM_CLOSED, streamid, "stream already assembled");
 
+  // запрос уже отдан пользователю (req теперь хранит ответ), а memory_queue уничтожена: данные выбрасываются
+  if (answered_before_data && !is_input_streaming()) [[unlikely]]
+    return;
   if (!is_input_streaming()) {
     if (!use_bytes(frame.data.size())) {
       HTTP2_LOG(connection->logctx, WARN, "memory limit exceeded while receiving DATA for stream {}",
