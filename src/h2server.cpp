@@ -270,7 +270,7 @@ struct h2server::impl {
     // after this function sessiongate must be closed to ensure all listeners are done
   }
 
-  dd::task<void> shutdown() {
+  dd::task<void> shutdown(deadline_t deadline) {
     co_await jump_on_ioctx(ioctx_ref());
     assert(std::this_thread::get_id() == tid);
     HTTP2_LOG_TRACE(logctx(), "shutdown started");
@@ -281,7 +281,19 @@ struct h2server::impl {
     for (auto& session : sessions)
       session.request_shutdown();
     stop_listeners();
+    any_timer timer = ioctx().create_timer();
+    if (deadline != deadline_t::never()) {
+      timer.set_callback([this](bool canceled) {
+        if (canceled)
+          return;
+        HTTP2_LOG(logctx(), WARN, "shutdown deadline reached, terminating {} sessions", sessions.size());
+        for (auto& session : sessions)
+          session.request_terminate();
+      });
+      timer.arm(deadline.tp);
+    }
     co_await closeg;
+    timer.cancel();
     co_await yield_on_ioctx(ioctx_ref());
     if (sessionsgate.is_closed())  // may be another shutdown/terminate
       sessionsgate.reopen();
@@ -363,8 +375,8 @@ internet_address h2server::listen(server_endpoint a) {
   return m_impl->listen(std::move(a));
 }
 
-dd::task<void> h2server::shutdown() {
-  return m_impl->shutdown();
+dd::task<void> h2server::shutdown(deadline_t deadline) {
+  return m_impl->shutdown(deadline);
 }
 
 dd::task<void> h2server::terminate() {

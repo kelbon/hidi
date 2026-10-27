@@ -63,5 +63,43 @@ SERVER_TEST("graceful shutdown refuses new streams") {
   REQUIRE((co_await client.receive_rsp()).streamid == 1);
 }
 
+// стрим, который никогда не завершится (клиент не досылает тело), не даёт мягкой остановке закончиться.
+// Её завершает дедлайн или terminate
+SERVER_TEST("shutdown with stuck stream") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+
+  std::vector<header> hdrs{
+      {":method", "POST"},
+      {":path", "/"},
+      {":scheme", "http"},
+      {":authority", addr.address().to_string()},
+  };
+  co_await client.send_req(1, hdrs, http_body_bytes(10, byte_t('a')), /*endstream=*/false);
+  co_await client.sync();
+
+  SECTION("deadline") {
+    auto h = server.shutdown(deadline_after(100ms)).start_and_detach(/*stop_at_end=*/true);
+    on_scope_exit {
+      // при провале теста shutdown ещё ждёт, его завершит разрушение сервера
+      if (h.done())
+        h.destroy();
+    };
+    co_await wait_until([&] { return h.done(); }, ioctx);
+  }
+  SECTION("terminate") {
+    auto h = server.shutdown().start_and_detach(/*stop_at_end=*/true);
+    on_scope_exit {
+      // при провале теста shutdown ещё ждёт, его завершит разрушение сервера
+      if (h.done())
+        h.destroy();
+    };
+    co_await net.sleep(ioctx, 100ms);
+    REQUIRE(!h.done());
+    co_await server.terminate();
+    co_await wait_until([&] { return h.done(); }, ioctx);
+  }
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

@@ -87,7 +87,9 @@ struct h2server {
   internet_address listen(server_endpoint);
 
   // shutdown server softly, all responses will be sent after this method calling
-  dd::task<void> shutdown();
+  // Стрим может не завершиться никогда (например клиент не читает ответ), поэтому сессии, не завершившиеся к
+  // `deadline`, обрываются как при `terminate`
+  dd::task<void> shutdown(deadline_t deadline = deadline_t::never());
   // server termination, stops server sessions without waiting for responses
   // but it can't stop response processing, and server are not going to send them
   dd::task<void> terminate();
