@@ -107,6 +107,48 @@ CLIENT_TEST("request deadline while response body is received") {
   co_await next_request_works(client, server, 3, ioctx);
 }
 
+// канал туннеля CONNECT: читает данные до EOF
+static streaming_body_t read_tunnel(memory_queue_ptr q, size_t& read, bool& ended, bool& aborted) {
+  for (;;) {
+    bytes_t chunk = co_await q->next_chunk();
+    if (chunk.empty())
+      break;
+    read += chunk.size();
+  }
+  aborted = q->aborted();
+  ended = true;
+}
+
+// дедлайн CONNECT ограничивает установку туннеля, а не его жизнь
+CLIENT_TEST("CONNECT deadline does not limit established tunnel") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  size_t read = 0;
+  bool ended = false;
+  bool aborted = false;
+  auto makestream = [&](http_response, memory_queue_ptr q, request_context) {
+    return read_tunnel(std::move(q), read, ended, aborted);
+  };
+  auto h = client
+               .send_connect_request(make_request(client, http_method_e::CONNECT), makestream,
+                                     deadline_after(200ms))
+               .start_and_detach(true);
+  on_scope_exit {
+    h.destroy();
+  };
+  co_await receive_request_headers(server, 1);
+  std::vector<header> ok{{":status", "200"}};
+  co_await server.send_headers(1, ok, /*endstream=*/false);
+  // туннель переживает дедлайн
+  co_await net.sleep(ioctx, 400ms);
+  co_await server.send_data(1, "data", /*end_stream=*/true);
+  co_await wait_until([&] { return ended && h.done(); }, ioctx);
+  REQUIRE(!aborted);
+  REQUIRE(read == 4);
+  REQUIRE(h.promise().result_or_rethrow() == 200);
+}
+
 // сервер сбросил обычный запрос. Запрос завершается ошибкой, соединение продолжает работать
 CLIENT_TEST("server resets request") {
   auto server = co_await fake_server_session(ioctx, {localhost()}, client);

@@ -644,6 +644,9 @@ dd::task<int> h2client::send_connect_request(
   int status = co_await con->response_received(*node);
   if (status < 0)
     throw_bad_status(status);
+  // дедлайн ограничивает установку туннеля, а не его жизнь
+  if (node->timers_hook.is_linked())
+    erase_byref(con->timers, *node);
   if (node->end_stream_received) [[unlikely]] {
     // сервер завершил стрим ответом, туннеля нет. Отказ (не 2xx, например 407 от прокси) возвращается
     // статусом, а 2xx без туннеля считается отменой запроса сервером
