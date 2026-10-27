@@ -38,7 +38,7 @@ void memory_queue::on_data_read(size_t sz) noexcept {
   if (!may_receive_data(*n))
     return;
   read_not_credited += uint32_t(sz);
-  // если настойки обновятся и сделают initial_stream_window_size больше, то в стрим добавится окно
+  // если настройки обновятся и сделают initial_stream_window_size больше, то в стрим добавится окно
   // поэтому не будет дедлока
   if (read_not_credited < n->connection->local_settings.initial_stream_window_size / 2)
     return;
