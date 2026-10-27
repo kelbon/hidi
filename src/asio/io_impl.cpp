@@ -205,8 +205,9 @@ dd::task<void> asio_tls_connection::shutdown() noexcept {
   return do_shutdown(writedata, sock.lowest_layer());
 }
 
-dd::task<void> asio_tls_connection::handshake(io_error_code& ec) {
-  co_await net.handshake(sock, asio::ssl::stream_base::server, ec);
+dd::task<void> asio_tls_connection::handshake(io_error_code& ec, bool is_client) {
+  co_await net.handshake(sock, is_client ? asio::ssl::stream_base::client : asio::ssl::stream_base::server,
+                         ec);
 }
 
 asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
@@ -344,22 +345,14 @@ void asio_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other
 
 // TLS
 
-// настраивает TLS клиента и делает handshake. Connection: asio_tls_connection или
-// asio_tls_buffered_connection
+// создаёт и настраивает клиентское TLS соединение. Connection: asio_tls_connection или
+// asio_tls_buffered_connection. Handshake делает вызывающий (connection_i::handshake), чтобы его можно было
+// прервать через shutdown
 template <typename Connection>
-static dd::task<any_connection_t> client_tls_handshake(auto& self, asio::ip::tcp::socket tcp_sock,
-                                                       const remote_and_local_endpoints& ep,
-                                                       asio_timer& timer, bool& timeoutflag) {
+static any_connection_t make_client_tls_connection(auto& self, asio::ip::tcp::socket tcp_sock,
+                                                   const remote_and_local_endpoints& ep) {
   namespace ssl = asio::ssl;
-  io_error_code ec;
   std::unique_ptr<Connection> res(new Connection(std::move(tcp_sock), self.client_sslctx));
-  // tcp_sock перемещён, теперь по таймауту нужно закрывать сокет внутри res
-  timer.set_callback([&](bool canceled) {
-    if (!canceled) {
-      timeoutflag = true;
-      noexport::close_tcp_sock(res->sock.lowest_layer());
-    }
-  });
   if (self.options.host_for_name_verification) {
     res->sock.set_verify_mode(ssl::verify_peer);
     res->sock.set_verify_callback(
@@ -377,17 +370,11 @@ static dd::task<any_connection_t> client_tls_handshake(auto& self, asio::ip::tcp
     if (ipec && !SSL_set_tlsext_host_name(res->sock.native_handle(), host->c_str()))
       throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
   }
-  co_await net.handshake(res->sock, ssl::stream_base::handshake_type::client, ec);
-  if (timeoutflag)
-    throw timeout_exception();
-  if (ec)
-    throw network_exception("[TCP/SSL] cannot ssl handshake: {}", ec.message());
-  co_return any_connection_t(std::move(res));
+  return any_connection_t(std::move(res));
 }
 
 static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, remote_and_local_endpoints ep,
                                                                   deadline_t deadline) {
-  namespace ssl = asio::ssl;
   using tcp = asio::ip::tcp;
 
   tcp::resolver resolver(self.ioctx);
@@ -431,15 +418,16 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
     throw network_exception("[TCP] cannot connect to {}, err: {}", ep.remote.to_string(), ec.message());
   if (self.starter)
     co_await self.starter(tcp_sock, deadline);
+  // таймер мог сработать во время starter и закрыть сокет. Таймаут handshake - забота вызывающего (см.
+  // connection_i::handshake)
+  if (timeoutflag)
+    throw timeout_exception();
   apply_tcp_options(tcp_sock, self.options);
   if (!self.client_sslctx)
     self.client_sslctx = make_ssl_context_for_client(self.options.additional_ssl_certificates).p;
-  if (self.options.buffer_writes) {
-    co_return co_await client_tls_handshake<asio_tls_buffered_connection>(self, std::move(tcp_sock), ep,
-                                                                          timer, timeoutflag);
-  }
-  co_return co_await client_tls_handshake<asio_tls_connection>(self, std::move(tcp_sock), ep, timer,
-                                                               timeoutflag);
+  if (self.options.buffer_writes)
+    co_return make_client_tls_connection<asio_tls_buffered_connection>(self, std::move(tcp_sock), ep);
+  co_return make_client_tls_connection<asio_tls_connection>(self, std::move(tcp_sock), ep);
 }
 
 asio_tls_io::asio_tls_io(client_ssl_context_ptr ctx, tcp_connection_options opts, starter_t s)

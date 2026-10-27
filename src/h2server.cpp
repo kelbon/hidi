@@ -200,7 +200,7 @@ struct h2server::impl {
       timer.arm(options.connection_timeout);
       {
         io_error_code ec;
-        co_await session.connection->tcpcon->handshake(ec);
+        co_await session.connection->tcpcon->handshake(ec, /*is_client=*/false);
         if (ec)
           throw network_exception(ec);
       }

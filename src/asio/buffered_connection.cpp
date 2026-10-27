@@ -226,8 +226,9 @@ dd::task<void> asio_tls_buffered_connection::shutdown() noexcept {
   return do_buffered_shutdown(writedata, sock.lowest_layer());
 }
 
-dd::task<void> asio_tls_buffered_connection::handshake(io_error_code& ec) {
-  co_await net.handshake(sock, asio::ssl::stream_base::server, ec);
+dd::task<void> asio_tls_buffered_connection::handshake(io_error_code& ec, bool is_client) {
+  co_await net.handshake(sock, is_client ? asio::ssl::stream_base::client : asio::ssl::stream_base::server,
+                         ec);
 }
 
 }  // namespace hidi

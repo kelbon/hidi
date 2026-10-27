@@ -272,6 +272,10 @@ inline dd::task<test_h2connection> fake_client_connection(
     any_io_context_ref io, endpoint addr, deadline_t deadline = deadline_after(DEFAULT_CONN_TIMEOUT),
     std::source_location = std::source_location::current()) {
   auto c = co_await io.create_connection_client({addr}, deadline);
+  // для TLS это handshake, для TCP ничего не делает
+  io_error_code ec;
+  co_await c->handshake(ec, /*is_client=*/true);
+  REQUIRE(!ec);
   co_return test_h2connection(new h2connection(std::move(c), *&io), /*client=*/true);
 }
 
