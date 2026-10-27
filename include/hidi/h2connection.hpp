@@ -139,6 +139,11 @@ struct h2stream {
 
   // returns false if not allowed to use 'n' bytes
   [[nodiscard]] bool use_bytes(size_t n) noexcept;
+  [[nodiscard]] bool use_bytes(std::string_view name, std::string_view value) noexcept {
+    // учитывает реальную нагрузку на сервер - нужно положить ещё http_header_t
+    // не даёт клиенту заспамить сервер хедерами по 1 байту
+    return use_bytes(name.size() + value.size() + sizeof(http_header_t));
+  }
 
   // если есть, то она управляет control flow
   [[nodiscard]] bool has_memory_queue() const noexcept {

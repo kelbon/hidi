@@ -137,7 +137,7 @@ void h2stream::receive_request_trailers(hpack::decoder& decoder, h2frame hdrs) {
     // запрос bistream (answer_before_data) уже отдан пользователю, трейлеры клиента игнорируются
     if (answered_before_data)
       return;
-    if (memory_limit_exceeded || !use_bytes(name.size() + value.size())) [[unlikely]] {
+    if (memory_limit_exceeded || !use_bytes(name, value)) [[unlikely]] {
       // not throw, maintain dynamic table anyway
       memory_limit_exceeded = true;
       return;
