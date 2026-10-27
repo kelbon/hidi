@@ -5,13 +5,9 @@
 
 using namespace hidi;
 
-static server_ssl_context_ptr test_ssl_ctx() {
-  return make_ssl_context_for_server(HTTP2_TLS_DIR "/test_server.crt", HTTP2_TLS_DIR "/test_server.key");
-}
-
 // graceful shutdown запрещает только НОВЫЕ стримы. Трейлеры стрима, который уже идёт, должны обрабатываться
 // как обычно, иначе запрос не завершится, а клиент получит RST_STREAM(REFUSED_STREAM) для принятого стрима
-SERVER_TEST("graceful shutdown does not refuse trailers of active stream", test_ssl_ctx()) {
+SERVER_TEST("graceful shutdown does not refuse trailers of active stream") {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
 

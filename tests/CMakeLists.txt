@@ -11,13 +11,13 @@ set_target_properties(fake_http2lib PROPERTIES
 	CXX_STANDARD 20)
 
 target_include_directories(fake_http2lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(fake_http2lib PUBLIC HTTP2_TLS_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 macro(add_http2_test NAME)
     add_executable(test_${NAME} ${CMAKE_CURRENT_SOURCE_DIR}/test_${NAME}.cpp)
     target_link_libraries(test_${NAME} PUBLIC fake_http2lib ${ARGN})
 
     set_target_properties(test_${NAME} PROPERTIES CXX_STANDARD 20)
-    target_compile_definitions(test_${NAME} PRIVATE HTTP2_TLS_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(test_${NAME} test_${NAME})
 endmacro()
 

@@ -18,6 +18,10 @@
 
 namespace hidi {
 
+server_ssl_context_ptr test_server_ssl_ctx() {
+  return make_ssl_context_for_server(HTTP2_TLS_DIR "/test_server.crt", HTTP2_TLS_DIR "/test_server.key");
+}
+
 std::string sourceloc_str(std::source_location loc) {
   return std::format("{}:{}:{}", loc.file_name(), loc.line(), loc.column());
 }
@@ -461,7 +465,8 @@ dd::task<void> test_h2connection::send_window_size_increment(stream_id_t streami
 
   std::vector<byte_t> bytes;
   window_update_frame::form(streamid, increment, std::back_inserter(bytes));
-
+  if (streamid == 0)
+    m_connectionWindow += increment;
   return send_raw_frame(std::move(bytes));
 }
 
@@ -499,10 +504,19 @@ dd::task<h2test_frame> test_h2connection::next_frame(deadline_t d, ping_e pingbe
       }
     } else {
       if (answer_window_update && frame.hdr.type == frame_e::DATA && frame.hdr.length != 0) {
-        // соединение
-        co_await send_window_size_increment(0, frame.hdr.length);
-        // поток
-        co_await send_window_size_increment(frame.hdr.streamid, frame.hdr.length);
+        // начальное окно, которое выставляет send_settings
+        constexpr uint32_t THRESHOLD = settings_t{}.initial_stream_window_size / 2;
+        m_unackedConnection += frame.hdr.length;
+        if (m_unackedConnection >= THRESHOLD)
+          co_await send_window_size_increment(0, std::exchange(m_unackedConnection, 0));
+        if (frame.hdr.flags & flags::END_STREAM) {
+          // стрим завершён, его окно больше не нужно
+          m_unackedStreams.erase(frame.hdr.streamid);
+        } else if (uint32_t unacked = m_unackedStreams[frame.hdr.streamid] += frame.hdr.length;
+                   unacked >= THRESHOLD) {
+          m_unackedStreams[frame.hdr.streamid] = 0;
+          co_await send_window_size_increment(frame.hdr.streamid, unacked);
+        }
       }
       co_return frame;
     }
@@ -560,6 +574,12 @@ dd::task<h2test_frame> test_h2connection::receive_frame(deadline_t d, std::sourc
     frame.data.resize(frame.hdr.length);
     co_await self.con->read(frame.data, ec);
     REQUIRE(!ec);
+    if (frame.hdr.type == frame_e::DATA) {
+      // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.1 пир не должен превышать окно соединения
+      self.m_connectionWindow -= frame.hdr.length;
+      if (self.m_connectionWindow < 0)
+        FAIL(std::format("peer exceeded connection window by {} bytes", -self.m_connectionWindow));
+    }
 #ifdef HTTP2_ENABLE_TRACE
     if (frame.hdr.type == frame_e::GOAWAY) {
       auto gf = goaway_frame::parse(frame.hdr, frame.data);

@@ -5,6 +5,42 @@
 using namespace hidi;
 using namespace std::chrono_literals;
 
+// как SERVER_TEST, но со своим сервером (НЕ эхо сервером)
+template <typename Server>
+static void run_custom_server_test(moko3::section_info* _section, std::string_view name,
+                                   h2server_options opts,
+                                   dd::task<void> (*body)(Server&, internet_address, any_io_context_ref)) {
+  auto run = [&](server_ssl_context_ptr ssl, bool buffer_writes) {
+    Server server(opts, make_asio_tls_io_context(std::move(ssl),
+                                                 tcp_connection_options{.buffer_writes = buffer_writes}));
+    internet_address addr(asio::ip::address_v4::loopback(), 0);
+    addr = server.listen({.addr = addr, .reuse_address = true});
+    bool ended = false;
+    std::exception_ptr ex;
+    (void)run_test(name, body(server, addr, *&server.ioctx()), ended, ex);
+    fuzzing::fuzzer fuz(moko3::get_testbox().randg());
+    fuz.run_until(deadline_after(moko3::get_testbox().test_timeout(name)), ended, server.ioctx());
+    if (ex)
+      std::rethrow_exception(std::move(ex));
+  };
+  SECTION("NO TLS") {
+    SECTION("direct writes") {
+      run(nullptr, false);
+    }
+    SECTION("buffered writes") {
+      run(nullptr, true);
+    }
+  }
+  SECTION("TLS") {
+    SECTION("direct writes") {
+      run(test_server_ssl_ctx(), false);
+    }
+    SECTION("buffered writes") {
+      run(test_server_ssl_ctx(), true);
+    }
+  }
+}
+
 // свой сервер, так как дефолтный - эхо
 struct connect_capable_server : h2server {
   using h2server::h2server;
@@ -13,25 +49,16 @@ struct connect_capable_server : h2server {
   }
 };
 
-static dd::task<void> extended_connect_ordering_body(internet_address addr, any_io_context_ref ioctx);
+static dd::task<void> extended_connect_ordering_body(connect_capable_server&, internet_address addr,
+                                                     any_io_context_ref ioctx);
 
 TEST("extended_connect_protocol_header_ordering") {
-  connect_capable_server server(h2server_options{}, make_asio_io_context());
-  internet_address addr(asio::ip::address_v4::loopback(), 0);
-  addr = server.listen({.addr = addr, .reuse_address = true});
-  bool ended = false;
-  std::exception_ptr ex;
-  (void)run_test("extended_connect_protocol_header_ordering",
-                 extended_connect_ordering_body(addr, *&server.ioctx()), ended, ex);
-  deadline_t deadline =
-      deadline_after(moko3::get_testbox().test_timeout("extended_connect_protocol_header_ordering"));
-  fuzzing::fuzzer fuz(moko3::get_testbox().randg());
-  fuz.run_until(deadline, ended, server.ioctx());
-  if (ex)
-    std::rethrow_exception(std::move(ex));
+  run_custom_server_test(_section, "extended_connect_protocol_header_ordering", h2server_options{},
+                         &extended_connect_ordering_body);
 }
 
-dd::task<void> extended_connect_ordering_body(internet_address addr, any_io_context_ref ioctx) {
+dd::task<void> extended_connect_ordering_body(connect_capable_server&, internet_address addr,
+                                              any_io_context_ref ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
 
@@ -147,6 +174,10 @@ struct slow_reader_server : h2server {
 // окно стрима минимально возможное, чтобы его легко было исчерпать
 constexpr inline uint32_t SLOW_READER_WINDOW = 65'535;
 
+static h2server_options slow_reader_options() {
+  return h2server_options{.stream_window_size = SLOW_READER_WINDOW};
+}
+
 static dd::task<test_h2connection> start_streaming_request(internet_address addr, any_io_context_ref ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
@@ -188,28 +219,15 @@ static dd::task<void> read_returns_window_body(slow_reader_server& server, inter
   REQUIRE(server.read_bytes == SLOW_READER_WINDOW + 1);
 }
 
-template <typename Server>
-static void run_custom_server_test(std::string_view name,
-                                   dd::task<void> (*body)(Server&, internet_address, any_io_context_ref)) {
-  Server server(h2server_options{.stream_window_size = SLOW_READER_WINDOW}, make_asio_io_context());
-  internet_address addr(asio::ip::address_v4::loopback(), 0);
-  addr = server.listen({.addr = addr, .reuse_address = true});
-  bool ended = false;
-  std::exception_ptr ex;
-  (void)run_test(name, body(server, addr, *&server.ioctx()), ended, ex);
-  fuzzing::fuzzer fuz(moko3::get_testbox().randg());
-  fuz.run_until(deadline_after(moko3::get_testbox().test_timeout(name)), ended, server.ioctx());
-  if (ex)
-    std::rethrow_exception(std::move(ex));
-}
-
 // непрочитанное потоковое тело не может превысить окно стрима: окно возвращается только по мере чтения
 TEST("unread streaming body is limited by stream window") {
-  run_custom_server_test("unread streaming body is limited by stream window", &unread_body_limited_body);
+  run_custom_server_test(_section, "unread streaming body is limited by stream window", slow_reader_options(),
+                         &unread_body_limited_body);
 }
 
 TEST("reading streaming body returns stream window") {
-  run_custom_server_test("reading streaming body returns stream window", &read_returns_window_body);
+  run_custom_server_test(_section, "reading streaming body returns stream window", slow_reader_options(),
+                         &read_returns_window_body);
 }
 
 static std::vector<header> post_headers(internet_address addr) {
@@ -296,8 +314,8 @@ static dd::task<void> ignored_body_upload(ignore_body_server&, internet_address 
 }
 
 TEST("streaming handler may ignore request body while response is sent") {
-  run_custom_server_test("streaming handler may ignore request body while response is sent",
-                         &ignored_body_upload);
+  run_custom_server_test(_section, "streaming handler may ignore request body while response is sent",
+                         slow_reader_options(), &ignored_body_upload);
 }
 
 // Ответ не зависит от тела запроса (например туннель в другой сервис закрылся) и заканчивается раньше, чем
@@ -346,8 +364,8 @@ static dd::task<void> response_ends_before_request(independent_reader_server& se
 }
 
 TEST("response ending before request body aborts body reader") {
-  run_custom_server_test("response ending before request body aborts body reader",
-                         &response_ends_before_request);
+  run_custom_server_test(_section, "response ending before request body aborts body reader",
+                         slow_reader_options(), &response_ends_before_request);
 }
 
 // Клиент отменяет загрузку (например закрыта вкладка браузера), пока ответ ждёт окна стрима. Сервер больше
