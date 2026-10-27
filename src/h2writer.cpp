@@ -275,6 +275,23 @@ static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, ht
     co_await write_continuations(&con, streamid, fhdr.length + H2FHL, std::move(bytes), ec);
 }
 
+// write_stream_data копирует каждый кусок в req.body.data, поэтому тело отдаётся кусками:
+// иначе на время отправки оно лежало бы в памяти дважды
+static streaming_body_t body_in_chunks(http_body_bytes body) {
+  constexpr size_t CHUNK = 64 * 1024;
+  for (size_t off = 0; off < body.size(); off += CHUNK)
+    co_yield std::span<const byte_t>(body).subspan(off, std::min(CHUNK, body.size() - off));
+}
+
+template <bool IS_CLIENT>
+static void write_body_detached(stream_ptr node, h2connection_ptr con, writer_callbacks_ptr cbs) {
+  assert(!node->is_output_streaming());
+  node->makebody = [body = std::move(node->req.body.data)](http_headers_t&, request_context) mutable {
+    return body_in_chunks(std::move(body));
+  };
+  (void)write_stream_data<IS_CLIENT>(std::move(node), std::move(con), std::move(cbs));
+}
+
 template <bool IS_CLIENT>
 dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callbacks_ptr cbs) try {
   assert(node && node->is_output_streaming());
@@ -472,7 +489,10 @@ dd::job start_writer_for(h2connection_ptr con, writer_on_network_err_t neterrcb,
       }
 
       // send data
-      if (!node->req.body.data.empty()) {
+      if (node->req.body.data.size() > size_t(std::max<cfint_t>(node->lr_streamlevel_windowsize, 0))) {
+        // один стрим не должен блокировать все другие
+        write_body_detached<IS_CLIENT>(node, con, cbs);
+      } else if (!node->req.body.data.empty()) {
         co_await write_data</*Streaming=*/false>(node, con, cbs, ec);
 
         if (ec || con->is_dropped()) {

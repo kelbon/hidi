@@ -498,7 +498,7 @@ dd::task<h2test_frame> test_h2connection::next_frame(deadline_t d, ping_e pingbe
           continue;
       }
     } else {
-      if (answer_window_update && frame.hdr.type == frame_e::DATA) {
+      if (answer_window_update && frame.hdr.type == frame_e::DATA && frame.hdr.length != 0) {
         // соединение
         co_await send_window_size_increment(0, frame.hdr.length);
         // поток
