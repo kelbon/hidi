@@ -225,6 +225,7 @@ struct h2client {
   // если сервер отказал ответом без тела (END_STREAM в HEADERS, статус не 2xx), `makestream` не вызывается и
   // возвращается этот статус
   // if client not connected yet, connects automatically
+  // Note: deadline for tunnel creation, not for full tunnel lifetime
   dd::task<int> send_connect_request(
       http_request request,
       move_only_fn<streaming_body_t(http_response, memory_queue_ptr, request_context)> makestream,
