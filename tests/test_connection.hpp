@@ -405,6 +405,41 @@ void server_test_impl(std::string_view name, moko3::section_info* section, serve
     std::rethrow_exception(std::move(ex));
 }
 
+// как SERVER_TEST, но со своим сервером (НЕ эхо сервером)
+template <typename Server>
+void run_custom_server_test(moko3::section_info* _section, std::string_view name, h2server_options opts,
+                            dd::task<void> (*body)(Server&, internet_address, any_io_context_ref)) {
+  auto run = [&](server_ssl_context_ptr ssl, bool buffer_writes) {
+    Server server(opts, make_asio_tls_io_context(std::move(ssl),
+                                                 tcp_connection_options{.buffer_writes = buffer_writes}));
+    internet_address addr(asio::ip::address_v4::loopback(), 0);
+    addr = server.listen({.addr = addr, .reuse_address = true});
+    bool ended = false;
+    std::exception_ptr ex;
+    (void)run_test(name, body(server, addr, *&server.ioctx()), ended, ex);
+    fuzzing::fuzzer fuz(moko3::get_testbox().randg());
+    fuz.run_until(deadline_after(moko3::get_testbox().test_timeout(name)), ended, server.ioctx());
+    if (ex)
+      std::rethrow_exception(std::move(ex));
+  };
+  SECTION("NO TLS") {
+    SECTION("direct writes") {
+      run(nullptr, false);
+    }
+    SECTION("buffered writes") {
+      run(nullptr, true);
+    }
+  }
+  SECTION("TLS") {
+    SECTION("direct writes") {
+      run(test_server_ssl_ctx(), false);
+    }
+    SECTION("buffered writes") {
+      run(test_server_ssl_ctx(), true);
+    }
+  }
+}
+
 // клиент и фейковый сервер работают на одном io_context. Тест получает io контекст сервера: на нём
 // fake_server_session создаёт acceptor (для TLS ему нужен серверный TLS контекст)
 template <auto* Foo>
