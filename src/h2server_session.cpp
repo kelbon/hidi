@@ -214,7 +214,10 @@ size_t h2server_session::requests_left_exactly() const noexcept {
     if (connection->find_response_by_streamid(n.streamid) == nullptr)
       ++count;
   }
-  return count + connection->responses.size();
+  // max берётся чтобы учитывать уже запущенные обработчики пользователя
+  // иначе поток headers+rst может забить высокоуровневую логику долгими запросами
+  // (не hidi cve, но других реализаций) https://nvd.nist.gov/vuln/detail/cve-2023-44487
+  return count + std::max(connection->responses.size(), responsegate.active_count());
 }
 
 void h2server_session::request_shutdown() noexcept {

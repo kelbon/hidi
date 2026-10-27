@@ -48,7 +48,8 @@ struct h2server_session : bi::list_base_hook<bi::link_mode<bi::safe_link>> {
     return !connection->requests.empty() || !connection->responses.empty();
   }
   [[nodiscard]] size_t requests_left_approx() const noexcept {
-    return connection->requests.size() + connection->responses.size();
+    // для понимания смотри комментарий в requests_left_exactly
+    return connection->requests.size() + std::max(connection->responses.size(), responsegate.active_count());
   }
   [[nodiscard]] size_t requests_left_exactly() const noexcept;
 
