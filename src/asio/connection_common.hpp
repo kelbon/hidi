@@ -75,13 +75,41 @@ inline dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& e
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
 
+// boost asio в tls игнорирует остальные буферы кроме первого, из-за чего оптимизация
+// с чтением заранее не работает, так что этот код обходит проблему
+inline dd::job do_tls_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& ec,
+                                std::coroutine_handle<> callback) {
+  single_read_assumption& rd = c.readdata;
+  while (!userbuf.empty()) {
+    if (userbuf.size() >= rd.readen_capacity) {
+      size_t n = co_await net.read_some(c.sock, userbuf, ec);
+      if (ec) [[unlikely]]
+        break;
+      userbuf = userbuf.subspan(n);
+      continue;
+    }
+    size_t n = co_await net.read_some(c.sock, std::span(rd.readen), ec);
+    if (ec) [[unlikely]]
+      break;
+    size_t copied = std::min(n, userbuf.size());
+    memcpy(userbuf.data(), rd.readen, copied);
+    userbuf = userbuf.subspan(copied);
+    rd.readen_start = rd.readen + copied;
+    rd.readen_end = rd.readen + n;
+  }
+  co_await dd::this_coro::destroy_and_transfer_control_to(callback);
+}
+
 inline void do_start_read(auto& self, std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
   // assumes only one reader at one time
   size_t avail = self.readdata.readen_end - self.readdata.readen_start;
   assert(avail < buf.size());  // start_read must be invoked only if try_read failed
   memcpy(buf.data(), self.readdata.readen_start, avail);
   self.readdata.readen_start = self.readdata.readen_end = self.readdata.readen;
-  (void)do_read_some(self, suffix(buf, buf.size() - avail), ec, h);
+  if constexpr (std::is_same_v<decltype(self.sock), asio::ssl::stream<asio::ip::tcp::socket>>)
+    (void)do_tls_read_some(self, suffix(buf, buf.size() - avail), ec, h);
+  else
+    (void)do_read_some(self, suffix(buf, buf.size() - avail), ec, h);
 }
 
 inline void close_tcp_sock(auto& tcp_sock) {
