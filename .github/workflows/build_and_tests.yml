@@ -13,27 +13,37 @@ concurrency:
 jobs:
   build:
     strategy:
+      # падение одной конфигурации не отменяет остальные
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04]
-        compiler: [g++-13, clang++-18]
+        # C-компилятор нужен зависимостям на C (AWS-LC), иначе они собираются системным cc
+        compiler:
+          - { cxx: g++-13, c: gcc-13 }
+          - { cxx: clang++-18, c: clang-18 }
         cpp_standard: [20]
         build_type: [Debug, Release]
     runs-on: ${{matrix.os}}
+    env:
+      SCCACHE_GHA_ENABLED: "true"
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
-          sudo apt-get install ninja-build
-          if [[ "${{ matrix.compiler }}" == g++-13* ]]; then
-            sudo apt-get install gcc-13
-          elif [[ "${{ matrix.compiler }}" == clang++-18* ]]; then
-            sudo apt-get install clang-18
+          # обе конфигурации (с санитайзерами и без) берут зависимости CPM из одной папки
+          echo "CPM_SOURCE_CACHE=${{ runner.temp }}/cpm-cache" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          if [[ "${{ matrix.compiler.cxx }}" == g++-13* ]]; then
+            sudo apt-get install -y gcc-13 g++-13
+          elif [[ "${{ matrix.compiler.cxx }}" == clang++-18* ]]; then
+            sudo apt-get install -y clang-18
           fi
       - name: Install h2spec
         run: |
-          wget https://github.com/summerwind/h2spec/releases/latest/download/h2spec_linux_amd64.tar.gz
+          wget https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz
           tar -xzf h2spec_linux_amd64.tar.gz
           sudo mv h2spec /usr/local/bin/
 
@@ -45,7 +55,8 @@ jobs:
         run: |
           cmake . -DHIDI_ENABLE_TESTING=ON            \
             -DCMAKE_BUILD_TYPE=${{matrix.build_type}}     \
-            -DCMAKE_CXX_COMPILER=${{matrix.compiler}}     \
+            -DCMAKE_CXX_COMPILER=${{matrix.compiler.cxx}} \
+            -DCMAKE_C_COMPILER=${{matrix.compiler.c}}     \
             -DCMAKE_CXX_STANDARD=${{matrix.cpp_standard}} \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5            \
             -DHIDI_ENABLE_SANITIZERS=ON               \
@@ -54,8 +65,6 @@ jobs:
             -B build_sanitizers -G "Ninja"
 
       - name: Build sanitizers
-        env:
-          SCCACHE_GHA_ENABLED: "true"
         run: |
           cmake --build build_sanitizers
 
@@ -68,7 +77,8 @@ jobs:
         run: |
           cmake . -DHIDI_ENABLE_TESTING=ON               \
             -DCMAKE_BUILD_TYPE=${{matrix.build_type}}     \
-            -DCMAKE_CXX_COMPILER=${{matrix.compiler}}     \
+            -DCMAKE_CXX_COMPILER=${{matrix.compiler.cxx}} \
+            -DCMAKE_C_COMPILER=${{matrix.compiler.c}}     \
             -DCMAKE_CXX_STANDARD=${{matrix.cpp_standard}} \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5            \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache           \
@@ -76,8 +86,6 @@ jobs:
             -B build -G "Ninja"
 
       - name: Build
-        env:
-          SCCACHE_GHA_ENABLED: "true"
         run: |
           cmake --build build
 
