@@ -92,8 +92,11 @@ server_ssl_context_ptr make_ssl_context_for_server(std::filesystem::path certifi
                                                    std::filesystem::path server_private_key,
                                                    const log_context& logctx) {
   ssl_context_ptr ctx = new ssl_context(asio::ssl::context_base::tls_server);
+  // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2 HTTP/2 требует TLS 1.2 или новее
   ctx->ctx.set_options(boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::no_sslv2 |
-                       boost::asio::ssl::context::single_dh_use);
+                       boost::asio::ssl::context::no_sslv3 | boost::asio::ssl::context::single_dh_use |
+                       boost::asio::ssl::context::no_compression | boost::asio::ssl::context::no_tlsv1 |
+                       boost::asio::ssl::context::no_tlsv1_1);
 
   io_error_code ec;
   ec = ctx->ctx.use_certificate_chain_file(std::filesystem::absolute(certificate).string(), ec);
