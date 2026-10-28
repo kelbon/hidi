@@ -1,14 +1,42 @@
 
 include(cmake/get_cpm.cmake)
 
-CPMAddPackage(
-  NAME OPENSSL
-  GITHUB_REPOSITORY janbar/openssl-cmake
-  GIT_TAG 1.1.1w-20231130
-  OPTIONS "WITH_APPS OFF"
-  EXCLUDE_FROM_ALL YES
-  SYSTEM OFF
-)
+if (HIDI_SSL_LIBRARY STREQUAL "aws-lc")
+  # AWS-LC: OpenSSL-совместимый API (libssl / libcrypto), сборка через CMake с ассемблером,
+  # Perl и Go при сборке не нужны.
+  # small-aws-lc - AWS-LC без тестов и утилит (~50 МБ вместо ~300 МБ), одна ветка: неглубокий клон ~8 МБ
+  CPMAddPackage(
+    NAME AWSLC
+    GITHUB_REPOSITORY kelbon/small-aws-lc
+    GIT_TAG v5.12.0-2
+    GIT_SHALLOW TRUE
+    OPTIONS "BUILD_TESTING OFF"
+            "BUILD_TOOL OFF"
+            "DISABLE_GO ON"
+            "DISABLE_PERL ON"
+    EXCLUDE_FROM_ALL YES
+    SYSTEM OFF
+  )
+
+  # Boost.Context (зависимость Boost.Asio, hidi его не использует) на Windows собирается из ассемблера в
+  # файлах .asm, как и AWS-LC (NASM). Расширение -> язык в CMake одно на весь проект, и последний включённый
+  # язык ассемблера забирает .asm себе, ломая сборку другого (CMAKE_ASM_COMPILE_OBJECT not set).
+  # Реализация на Windows fibers ассемблер не требует
+  if (WIN32)
+    set(BOOST_CONTEXT_IMPLEMENTATION winfib CACHE STRING "Boost.Context implementation (fcontext, ucontext, winfib)")
+  endif()
+elseif (HIDI_SSL_LIBRARY STREQUAL "openssl")
+  CPMAddPackage(
+    NAME OPENSSL
+    GITHUB_REPOSITORY janbar/openssl-cmake
+    GIT_TAG 1.1.1w-20231130
+    OPTIONS "WITH_APPS OFF"
+    EXCLUDE_FROM_ALL YES
+    SYSTEM OFF
+  )
+else()
+  message(FATAL_ERROR "HIDI_SSL_LIBRARY must be aws-lc or openssl, got: '${HIDI_SSL_LIBRARY}'")
+endif()
 
 CPMAddPackage(
   NAME KELCORO

@@ -5,6 +5,12 @@ project(hidi)
 option(HIDI_ENABLE_TESTING  "Set to ON to enable tests"      OFF)
 option(HIDI_USE_CPM "Set to ON to enable use CPM for get dependencies" ON)
 option(HIDI_ENABLE_SANITIZERS "build with sanitizers" OFF)
+# библиотека TLS, которую скачивает CPM (HIDI_USE_CPM):
+#   aws-lc  - AWS-LC, OpenSSL-совместимый API, сборка с ассемблером
+#   openssl - OpenSSL 1.1.1 (janbar/openssl-cmake), без ассемблера
+set(HIDI_SSL_LIBRARY "aws-lc" CACHE STRING "TLS library downloaded with CPM: aws-lc or openssl")
+# для подсказки в gui или в другом месте
+set_property(CACHE HIDI_SSL_LIBRARY PROPERTY STRINGS aws-lc openssl)
 
 # file for storing SSL keys, useful for debugging SSL connection via Wireshark. Disabled by default
 set(HIDI_DEBUG_SSL_KEYS_FILE "" CACHE FILEPATH "")
