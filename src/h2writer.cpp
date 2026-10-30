@@ -148,9 +148,8 @@ template <bool Streaming>
 }
 
 template <bool Streaming>
-static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, writer_callbacks_ptr cbs,
-                                 io_error_code& ec) try {
-  assert(con && work && cbs && cbs->neterrcb);
+static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, io_error_code& ec) try {
+  assert(con && work);
   http_body_bytes& data = work->req.body.data;
 
   // uses guarantee about FRAME_LEN_BYTES before .data()
@@ -326,7 +325,7 @@ dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callback
     memcpy(snode.req.body.data.data(), chunk.data(), chunk.size());
     HTTP2_LOG_TRACE(con->logctx, "sendind DATA part for stream {}, len: {}, bodystr: \"{}\"", snode.streamid,
                     snode.req.body.data.size(), snode.req.body.strview());
-    co_await write_data</*Streaming=*/true>(node, con, cbs, ec);
+    co_await write_data</*Streaming=*/true>(node, con, ec);
 
     if (ec)
       goto end;
@@ -493,7 +492,7 @@ dd::job start_writer_for(h2connection_ptr con, writer_on_network_err_t neterrcb,
         // один стрим не должен блокировать все другие
         write_body_detached<IS_CLIENT>(node, con, cbs);
       } else if (!node->req.body.data.empty()) {
-        co_await write_data</*Streaming=*/false>(node, con, cbs, ec);
+        co_await write_data</*Streaming=*/false>(node, con, ec);
 
         if (ec || con->is_dropped()) {
           if (ec != boost::asio::error::operation_aborted)

@@ -159,8 +159,6 @@ void h2stream::receive_response_headers(hpack::decoder& decoder, h2frame frame) 
   assert(frame.header.type == frame_e::HEADERS);
   HTTP2_LOG_TRACE(logctx(), "received HEADERS: stream: {}, len: {}", frame.header.streamid,
                   frame.header.length);
-  // Note: this code decodes headers block or fails with protocol_error (ends connection)
-  // thats why we dont care about `decode_headers_block` in fail branckes
 
   assert(frame.header.flags & flags::END_HEADERS);
 

@@ -351,7 +351,7 @@ struct h2connection {
   // used when client send request and waits for response
   // OR
   // when server assembles request (in this case 'responses' used as hash table)
-  // or server writes response and inserts into responses to catch WINDOW_UPDATe / RST_STREAM
+  // or server writes response and inserts into responses to catch WINDOW_UPDATE / RST_STREAM
   void insert_response_node(h2stream& node) {
     responses.insert(node);
     if (responses.size() == buckets.size()) [[unlikely]] {

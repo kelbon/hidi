@@ -347,11 +347,11 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
         if (node) {
           con.finish_request_with_user_exception(*node, std::current_exception());
         } else if (e.errc != errc_e::STREAM_CLOSED) {
-          // на случай если мы сами отправили rst - игнорируем фреймы пришедшие на закрытый стрим
-          // https://www.rfc-editor.org/info/rfc9113/#section-5.1
-          // "An endpoint can perform this minimal processing for all streams that are in the “closed” state."
           send_rst_stream(&con, e.streamid, e.errc).start_and_detach();
         }
+        // на случай если мы сами отправили rst - игнорируем фреймы пришедшие на закрытый стрим
+        // https://www.rfc-editor.org/info/rfc9113/#section-5.1
+        // "An endpoint can perform this minimal processing for all streams that are in the “closed” state."
         // do not require connection close
       }
       con.validate_pending_reply_frames();
