@@ -502,6 +502,49 @@ dd::task<int> h2client::send_request(on_header_fn_ptr on_header, on_data_part_fn
   co_return co_await con->response_received(*node);
 }
 
+// полностью дублирует send_request выше ради производительности, но выставляет 'ctx'
+dd::task<int> h2client::send_request(client_request_context& ctx, on_header_fn_ptr on_header,
+                                     on_data_part_fn_ptr on_data_part, http_request request,
+                                     deadline_t deadline) {
+  // for CONNECT send_connect_request
+  assert(request.method != http_method_e::CONNECT);
+  assert(!ctx);
+  if (stop_requested()) [[unlikely]]
+    co_return reqerr_e::CANCELLED;
+  if (deadline.is_reached()) [[unlikely]]
+    co_return reqerr_e::TIMEOUT;
+  ++m_requestsInProgress;
+  on_scope_exit {
+    --m_requestsInProgress;
+  };
+  h2connection_ptr con = co_await borrow_connection(deadline);
+  if (deadline.is_reached())
+    co_return reqerr_e::TIMEOUT;
+  if (!con)
+    co_return reqerr_e::NETWORK_ERR;
+  if (stop_requested()) [[unlikely]]
+    co_return reqerr_e::CANCELLED;
+  assert(!request.path.empty());
+  request.scheme = con->tcpcon->is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
+  stream_id_t streamid = con->next_streamid();
+  HTTP2_LOG_TRACE(con->logctx, "sending http2 request, path: {}, method: {}, streamid: {}", request.path,
+                  e2str(request.method), streamid);
+
+  stream_ptr node = con->new_stream_node(std::move(request), deadline, on_header, on_data_part, streamid);
+
+  // запрос можно отменить, уничтожив его корутину
+  on_scope_exit {
+    if (!node->finished())
+      con->cancel_request(*node);
+  };
+  ctx.node = node;
+  on_scope_exit {
+    ctx.node = nullptr;
+  };
+
+  co_return co_await con->response_received(*node);
+}
+
 dd::task<int> h2client::send_streaming_request(on_header_fn_ptr on_header, on_data_part_fn_ptr on_data_part,
                                                http_request request, stream_body_maker_t makebody,
                                                deadline_t deadline) {

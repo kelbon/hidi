@@ -170,6 +170,12 @@ struct h2client {
   dd::task<int> send_request(on_header_fn_ptr on_header, on_data_part_fn_ptr on_data_part, http_request,
                              deadline_t deadline);
 
+  // то же, но заполняет `ctx` на время выполнения запроса
+  // precondition: контекст не используется другим запросом
+  // `ctx` должен жить, пока выполняется запрос
+  dd::task<int> send_request(client_request_context& ctx, on_header_fn_ptr on_header,
+                             on_data_part_fn_ptr on_data_part, http_request, deadline_t deadline);
+
   // throws on errors
   dd::task<http_response> send_request(http_request, deadline_t);
 

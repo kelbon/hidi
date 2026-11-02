@@ -49,4 +49,40 @@ struct request_context {
   any_io_context_ptr owner_ioctx() const;
 };
 
+struct client_request_context {
+ private:
+  stream_ptr node = nullptr;
+
+  friend struct h2client;
+
+ public:
+  client_request_context() = default;
+
+  // `send_request` хранит ссылку на контекст
+  client_request_context(client_request_context&&) = delete;
+  void operator=(client_request_context&&) = delete;
+
+  // true, пока запрос выполняется
+  explicit operator bool() const noexcept {
+    return node != nullptr;
+  }
+
+  // 0 - хедеров ещё не получали
+  // 1хх - какой-то гений решил ответить промежуточным ответом, советую игнорировать
+  // остальное - ответ сервера
+  int status() const noexcept;
+
+  // собеседник завершил стрим (получен END_STREAM)
+  // В `on_header` true означает, что это трейлеры
+  bool end_stream_received() const noexcept;
+
+  stream_id_t streamid() const noexcept;
+
+  // true if remote endpoint already sent RST_STREAM for this request
+  // or connection dropped already
+  bool canceled() const noexcept;
+
+  any_io_context_ptr owner_ioctx() const;
+};
+
 }  // namespace hidi

@@ -117,7 +117,7 @@ struct h2stream {
   deadline_t deadline;
   dd::task<int>::handle_type task;  // setted by 'await_suspend' (requester)
   h2connection_ptr connection = nullptr;
-  // received resonse (filled by 'reader' in connection)
+  // received response (filled by 'reader' in connection)
   on_header_fn_ptr on_header_fn;
   on_data_part_fn_ptr on_data_part_fn;
   int status = reqerr_e::UNKNOWN_ERR;

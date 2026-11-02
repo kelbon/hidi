@@ -55,6 +55,29 @@ dd::task<void> request_context::send_interim_response(int status, http_headers_t
   }
 }
 
+int client_request_context::status() const noexcept {
+  // до HEADERS в узле отрицательное значение (reqerr_e)
+  return node && node->status > 0 ? node->status : 0;
+}
+
+bool client_request_context::end_stream_received() const noexcept {
+  return node && node->end_stream_received;
+}
+
+stream_id_t client_request_context::streamid() const noexcept {
+  return node ? node->streamid : 0;
+}
+
+bool client_request_context::canceled() const noexcept {
+  return node && (node->canceled_by_rststream || node->connection->is_dropped());
+}
+
+any_io_context_ptr client_request_context::owner_ioctx() const {
+  if (!node || !node->connection)
+    return nullptr;
+  return &node->connection->ioctx;
+}
+
 any_io_context_ptr request_context::owner_ioctx() const {
   assert(node);
   if (!node->connection)

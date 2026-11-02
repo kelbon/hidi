@@ -408,5 +408,85 @@ CLIENT_TEST("user exception completes request task") {
   REQUIRE(client.count_active_requests() == 0);
 }
 
+// контекст заполнен, пока запрос выполняется: статус известен в колбэках до конца стрима, трейлеры отличаются
+// по end_stream_received
+CLIENT_TEST("client request context") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  struct seen_header {
+    std::string name;
+    int status;
+    bool end_stream;
+  };
+  client_request_context ctx;
+  std::vector<seen_header> headers;
+  std::vector<int> data_statuses;
+  std::vector<stream_id_t> streamids;
+  auto on_header = [&](std::string_view name, std::string_view) {
+    headers.push_back({std::string(name), ctx.status(), ctx.end_stream_received()});
+    streamids.push_back(ctx.streamid());
+  };
+  auto on_data = [&](std::span<const byte_t>, bool) {
+    data_statuses.push_back(ctx.status());
+    streamids.push_back(ctx.streamid());
+  };
+  auto check_empty = [&] {
+    REQUIRE(!ctx);
+    REQUIRE(ctx.status() == 0);
+    REQUIRE(ctx.streamid() == 0);
+    REQUIRE(!ctx.end_stream_received());
+    REQUIRE(!ctx.canceled());
+    REQUIRE(ctx.owner_ioctx() == nullptr);
+  };
+  check_empty();
+
+  SECTION("interim, headers, data, trailers") {
+    auto h = client.send_request(ctx, &on_header, &on_data, make_request(client), deadline_after(10s))
+                 .start_and_detach(/*stop_at_end=*/true);
+    on_scope_exit {
+      h.destroy();
+    };
+    stream_id_t streamid = (co_await server.receive_req()).streamid;
+    // стрим создан, HEADERS ответа ещё нет
+    REQUIRE(ctx);
+    REQUIRE(ctx.status() == 0);
+    REQUIRE(ctx.streamid() == streamid);
+    REQUIRE(ctx.owner_ioctx() != nullptr);
+
+    co_await server.send_headers(streamid, {{":status", "103"}, {"x-interim", "1"}}, /*endstream=*/false);
+    co_await server.send_headers(streamid, {{":status", "404"}, {"x-header", "1"}}, /*endstream=*/false);
+    co_await server.send_data(streamid, "abc", /*end_stream=*/false);
+    co_await server.send_headers(streamid, {{"x-trailer", "1"}}, /*endstream=*/true);
+    co_await wait_until([&] { return h.done(); }, ioctx);
+
+    REQUIRE(h.promise().result_or_rethrow() == 404);
+    REQUIRE(headers.size() == 3);
+    REQUIRE(headers[0].name == "x-interim" && headers[0].status == 103 && !headers[0].end_stream);
+    REQUIRE(headers[1].name == "x-header" && headers[1].status == 404 && !headers[1].end_stream);
+    REQUIRE(headers[2].name == "x-trailer" && headers[2].status == 404 && headers[2].end_stream);
+    // DATA и пустой последний кусок после трейлеров
+    REQUIRE(data_statuses == std::vector{404, 404});
+    REQUIRE(std::ranges::all_of(streamids, [&](stream_id_t id) { return id == streamid; }));
+  }
+  SECTION("headers with END_STREAM are not trailers") {
+    auto h = client.send_request(ctx, &on_header, &on_data, make_request(client), deadline_after(10s))
+                 .start_and_detach(/*stop_at_end=*/true);
+    on_scope_exit {
+      h.destroy();
+    };
+    stream_id_t streamid = (co_await server.receive_req()).streamid;
+    co_await server.send_headers(streamid, {{":status", "204"}, {"x-header", "1"}}, /*endstream=*/true);
+    co_await wait_until([&] { return h.done(); }, ioctx);
+
+    REQUIRE(h.promise().result_or_rethrow() == 204);
+    REQUIRE(headers.size() == 1);
+    REQUIRE(headers[0].status == 204 && !headers[0].end_stream);
+    REQUIRE(data_statuses.empty());
+  }
+  // после запроса контекст пуст и пригоден для следующего
+  check_empty();
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;
