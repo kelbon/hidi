@@ -8,7 +8,7 @@ if (HIDI_SSL_LIBRARY STREQUAL "aws-lc")
   CPMAddPackage(
     NAME AWSLC
     GITHUB_REPOSITORY kelbon/small-aws-lc
-    GIT_TAG v5.12.0-2
+    GIT_TAG v5.12.0-3
     GIT_SHALLOW TRUE
     OPTIONS "BUILD_TESTING OFF"
             "BUILD_TOOL OFF"

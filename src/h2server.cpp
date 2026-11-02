@@ -91,7 +91,7 @@ struct h2server::impl {
     };
     accept_connections(sessionsgate.hold(), lit).start_and_detach();
     eraselistener.no_longer_needed();
-    HTTP2_LOG(logctx(), INFO, "Server listening on {}:{}", binded.address().to_string(), a.addr.port());
+    HTTP2_LOG(logctx(), INFO, "Server listening on {}:{}", binded.address().to_string(), binded.port());
     return binded;
   }
 
