@@ -454,10 +454,13 @@ CLIENT_TEST("client request context") {
     REQUIRE(ctx.streamid() == streamid);
     REQUIRE(ctx.owner_ioctx() != nullptr);
 
-    co_await server.send_headers(streamid, {{":status", "103"}, {"x-interim", "1"}}, /*endstream=*/false);
-    co_await server.send_headers(streamid, {{":status", "404"}, {"x-header", "1"}}, /*endstream=*/false);
+    std::vector<header> hdrs1{{":status", "103"}, {"x-interim", "1"}};
+    co_await server.send_headers(streamid, hdrs1, /*endstream=*/false);
+    std::vector<header> hdrs2{{":status", "404"}, {"x-header", "1"}};
+    co_await server.send_headers(streamid, hdrs2, /*endstream=*/false);
     co_await server.send_data(streamid, "abc", /*end_stream=*/false);
-    co_await server.send_headers(streamid, {{"x-trailer", "1"}}, /*endstream=*/true);
+    std::vector<header> hdrs3{{"x-trailer", "1"}};
+    co_await server.send_headers(streamid, hdrs3, /*endstream=*/true);
     co_await wait_until([&] { return h.done(); }, ioctx);
 
     REQUIRE(h.promise().result_or_rethrow() == 404);
@@ -476,7 +479,8 @@ CLIENT_TEST("client request context") {
       h.destroy();
     };
     stream_id_t streamid = (co_await server.receive_req()).streamid;
-    co_await server.send_headers(streamid, {{":status", "204"}, {"x-header", "1"}}, /*endstream=*/true);
+    std::vector<header> hdrs{{":status", "204"}, {"x-header", "1"}};
+    co_await server.send_headers(streamid, hdrs, /*endstream=*/true);
     co_await wait_until([&] { return h.done(); }, ioctx);
 
     REQUIRE(h.promise().result_or_rethrow() == 204);
