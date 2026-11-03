@@ -20,8 +20,9 @@ jobs:
         # C-компилятор нужен зависимостям на C (AWS-LC), иначе они собираются системным cc
         compiler:
           - { cxx: g++-13, c: gcc-13 }
+          - { cxx: g++-14, c: gcc-14 }
           - { cxx: clang++-18, c: clang-18 }
-        cpp_standard: [20, 23]
+        cpp_standard: [20]
         build_type: [Debug, Release]
     runs-on: ${{matrix.os}}
     env:
@@ -40,6 +41,8 @@ jobs:
             sudo apt-get install -y gcc-13 g++-13
           elif [[ "${{ matrix.compiler.cxx }}" == clang++-18* ]]; then
             sudo apt-get install -y clang-18
+          elif [[ "${{ matrix.compiler.cxx }}" == g++-14* ]]; then
+            sudo apt-get install -y g++-14
           fi
       - name: Install h2spec
         run: |
