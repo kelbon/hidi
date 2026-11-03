@@ -14,7 +14,7 @@ struct connect_capable_server : h2server {
 };
 
 static dd::task<void> extended_connect_ordering_body(connect_capable_server&, internet_address addr,
-                                                     any_io_context_ref ioctx);
+                                                     test_io ioctx);
 
 TEST("extended_connect_protocol_header_ordering") {
   run_custom_server_test(_section, "extended_connect_protocol_header_ordering", h2server_options{},
@@ -22,7 +22,7 @@ TEST("extended_connect_protocol_header_ordering") {
 }
 
 dd::task<void> extended_connect_ordering_body(connect_capable_server&, internet_address addr,
-                                              any_io_context_ref ioctx) {
+                                              test_io ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
 
@@ -142,7 +142,7 @@ static h2server_options slow_reader_options() {
   return h2server_options{.stream_window_size = SLOW_READER_WINDOW};
 }
 
-static dd::task<test_h2connection> start_streaming_request(internet_address addr, any_io_context_ref ioctx) {
+static dd::task<test_h2connection> start_streaming_request(internet_address addr, test_io ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
   std::vector<header> hdrs{
@@ -158,7 +158,7 @@ static dd::task<test_h2connection> start_streaming_request(internet_address addr
 }
 
 static dd::task<void> unread_body_limited_body(slow_reader_server& server, internet_address addr,
-                                               any_io_context_ref ioctx) {
+                                               test_io ioctx) {
   auto client = co_await start_streaming_request(addr, ioctx);
   // обработчик не читает, поэтому окно не возвращено и лишний байт нарушает его
   co_await client.send_data(1, "b", /*end_stream=*/true);
@@ -169,7 +169,7 @@ static dd::task<void> unread_body_limited_body(slow_reader_server& server, inter
 }
 
 static dd::task<void> read_returns_window_body(slow_reader_server& server, internet_address addr,
-                                               any_io_context_ref ioctx) {
+                                               test_io ioctx) {
   auto client = co_await start_streaming_request(addr, ioctx);
   server.start_reading = true;
   for (;;) {
@@ -248,7 +248,7 @@ struct ignore_body_server : h2server {
 };
 
 static dd::task<void> ignored_body_upload(ignore_body_server&, internet_address addr,
-                                          any_io_context_ref ioctx) {
+                                          test_io ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   // окно стримов клиента 65'535 по умолчанию, ответ в него не помещается
   co_await emulate_client_connection(client);
@@ -314,7 +314,7 @@ struct independent_reader_server : h2server {
 };
 
 static dd::task<void> response_ends_before_request(independent_reader_server& server, internet_address addr,
-                                                   any_io_context_ref ioctx) {
+                                                   test_io ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
   co_await client.send_headers(1, post_headers(addr), /*endstream=*/false);
@@ -441,7 +441,7 @@ CLIENT_TEST("request body larger than stream window does not block other request
 
 // канал туннеля CONNECT, читает данные от сервера после `start_reading`
 static streaming_body_t counting_tunnel(memory_queue_ptr q, const bool& start_reading, size_t& read,
-                                        bool& ended, bool& aborted, any_io_context_ref ioctx) {
+                                        bool& ended, bool& aborted, test_io ioctx) {
   while (!start_reading)
     co_await yield_on_ioctx(ioctx);
   for (;;) {

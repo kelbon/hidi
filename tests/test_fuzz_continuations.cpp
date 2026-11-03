@@ -26,12 +26,12 @@ int main() try {
   opts.max_concurrent_streams = 10;
   // make CONTINUATIONS possible
   opts.max_receive_frame_size = hidi::MIN_MAX_FRAME_LEN;
-  hidi::echo_server server(opts);
+  hidi::echo_server server(nullptr, opts);
 
   asio::ip::tcp::endpoint ipv6_endpoint(asio::ip::address_v6::loopback(), 8080);
   server.listen(hidi::server_endpoint{.addr = ipv6_endpoint, .reuse_address = true});
 
-  hidi::h2client client1(ipv6_endpoint,
+  hidi::h2client client1(ipv6_endpoint, nullptr,
                          {// avoid sending too many requests because server sets max concurrent streams == 10
                           .allow_requests_before_server_settings = false});
 

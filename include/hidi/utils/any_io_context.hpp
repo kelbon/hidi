@@ -4,6 +4,8 @@
 #include "hidi/utils/any_timer.hpp"
 #include "hidi/utils/any_acceptor.hpp"
 #include "hidi/utils/address.hpp"
+#include "hidi/asio/ssl_context.hpp"
+#include "hidi/tcp_connection_options.hpp"
 
 #include <kelcoro/executor_interface.hpp>
 #include <kelcoro/task.hpp>
@@ -44,19 +46,18 @@ struct remote_and_local_endpoints {
   std::optional<internet_address> local = std::nullopt;
 };
 
-// creates TCP-like connection (client-side)
-// Note: при реализации нужно учитывать что есть клиентский и серверный ssl context
-// поэтому create_connection_client и create_acceptor должны использовать разные контексты
-// (реализация не вызывает на одном и том же контексте обе эти функции никогда, кроме тестов)
-anyany_method2_n(create_connection_client_m, create_connection_client,
-                 (&self, remote_and_local_endpoints e,
-                  deadline_t d) requires(self.create_connection_client(e, d))
-                     ->dd::task<any_connection_t>);
+// Контекст - цикл событий и фабрика соединений. Как соединение устроено (TLS или нет, параметры TCP) задаёт
+// создающий его клиент или сервер, поэтому на одном контексте живут и TLS, и обычные соединения
 
-// creates TCP-like acceptor, which creates server-side connections in 'accept'
+// creates TCP-like connection (client-side). `ssl` == nullptr - без TLS
+anyany_method2_n(create_connection_client_m, create_connection_client,
+                 (&self, remote_and_local_endpoints e, deadline_t d, tcp_connection_options opts,
+                  client_ssl_context_ptr ssl) requires(self.create_connection_client(e, d, opts, ssl))
+                     ->dd::task<any_connection_t>);
+// creates TCP-like acceptor, which creates server-side connections in 'accept'. `ssl` == nullptr - без TLS
 anyany_method2_n(create_acceptor_m, create_acceptor,
-                 (&self, internet_address addr,
-                  bool reuse_address) requires(self.create_acceptor(addr, reuse_address))
+                 (&self, internet_address addr, bool reuse_address, tcp_connection_options opts,
+                  server_ssl_context_ptr ssl) requires(self.create_acceptor(addr, reuse_address, opts, ssl))
                      ->any_acceptor);
 
 struct rebind_context_m;

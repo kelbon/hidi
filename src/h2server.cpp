@@ -52,6 +52,8 @@ namespace hidi {
 struct h2server::impl {
   // on top bcs of destroy order
   any_io_context io;
+  // nullptr - без TLS
+  server_ssl_context_ptr ssl;
   bi::list<h2server_session> sessions;
   std::list<any_acceptor> listeners;
   // gate for opened sessions / acceptors
@@ -72,15 +74,16 @@ struct h2server::impl {
     return options.logctx;
   }
 
-  explicit impl(any_io_context io, h2server_options opts, h2server& owner)
-      : io(std::move(io)), options(std::move(opts)), creator(&owner) {
+  explicit impl(any_io_context io, server_ssl_context_ptr ssl, h2server_options opts, h2server& owner)
+      : io(std::move(io)), ssl(std::move(ssl)), options(std::move(opts)), creator(&owner) {
     options.logctx.name = unique_name{};  // generate new (for different names for each server in h2server_mt)
     options.logctx.name.set_prefix(SERVER_PREFIX);
   }
 
   internet_address listen(server_endpoint a) {
     assert(std::this_thread::get_id() == tid);
-    any_acceptor& acceptor = listeners.emplace_back(io.create_acceptor(a.addr, a.reuse_address));
+    any_acceptor& acceptor =
+        listeners.emplace_back(io.create_acceptor(a.addr, a.reuse_address, options.tcp, ssl));
     // store resolved endpoint (e.g. if port 0 was used) and store it before accept_connections
     // (accept_connections may delete acceptor!)
     internet_address binded = acceptor.get_local_endpoint();
@@ -320,19 +323,8 @@ struct h2server::impl {
   }
 };
 
-h2server::h2server(h2server_options options) : h2server(std::move(options), make_asio_io_context()) {
-}
-
-h2server::h2server(h2server_options options, any_io_context io)
-    : m_impl(std::make_unique<h2server::impl>(std::move(io), std::move(options), *this)) {
-}
-
-h2server::h2server(h2server_options options, tcp_connection_options tcpopts)
-    : h2server(std::move(options), make_asio_io_context(std::move(tcpopts))) {
-}
-
-h2server::h2server(server_ssl_context_ptr ctx, h2server_options options, tcp_connection_options tcpopts)
-    : h2server(std::move(options), make_asio_tls_io_context(std::move(ctx), std::move(tcpopts))) {
+h2server::h2server(server_ssl_context_ptr ssl, h2server_options options, any_io_context io)
+    : m_impl(std::make_unique<h2server::impl>(std::move(io), std::move(ssl), std::move(options), *this)) {
 }
 
 h2server::~h2server() {

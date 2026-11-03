@@ -47,20 +47,16 @@ void apply_tcp_options(boost::asio::basic_socket<boost::asio::ip::tcp, E>& tcp_s
 
 namespace hidi {
 
-template <typename Context>
-static void do_rebind_tcp_context(any_connection_t& con, any_io_context_ref other) {
-  asio::io_context& ioctx = aa::any_cast<std::remove_cv_t<Context>&>(other).ioctx;
-  auto* p = dynamic_cast<asio_connection*>(rebind_buffered(con, other).get());
-  assert(p);
-  noexport::rebind_tcp_executor(*p, ioctx);
-}
-
-template <typename Context>
-static void do_rebind_tls_context(any_connection_t& con, any_io_context_ref other) {
-  asio::io_context& ioctx = aa::any_cast<std::remove_cv_t<Context>&>(other).ioctx;
-  auto* p = dynamic_cast<asio_tls_connection*>(rebind_buffered(con, other).get());
-  assert(p);
-  noexport::rebind_tls_executor(*p, ioctx);
+// переносит соединение на другой контекст (h2server_mt). TLS или нет - по самому соединению
+static void do_rebind_context(any_connection_t& con, asio::io_context& ioctx, any_io_context_ref other) {
+  connection_i* inner = rebind_buffered(con, other).get();
+  if (auto* tls = dynamic_cast<asio_tls_connection*>(inner)) {
+    noexport::rebind_tls_executor(*tls, ioctx);
+  } else {
+    auto* tcp = dynamic_cast<asio_connection*>(inner);
+    assert(tcp);
+    noexport::rebind_tcp_executor(*tcp, ioctx);
+  }
 }
 
 // см. tcp_connection_options::buffer_writes
@@ -225,132 +221,21 @@ dd::task<void> asio_connection::shutdown() noexcept {
   return do_shutdown(writedata, sock);
 }
 
-static dd::task<any_connection_t> do_create_connection_client(auto& self, remote_and_local_endpoints ep,
-                                                              deadline_t deadline) {
-  using tcp = asio::ip::tcp;
-
-  tcp::resolver resolver(self.ioctx);
-
-  asio_timer timer(self.ioctx);
-  bool timeoutflag = false;
-
-  timer.arm(deadline);
-  timer.set_callback([&](bool canceled) {
-    if (!canceled) {
-      timeoutflag = true;
-      resolver.cancel();
-    }
-  });
-
-  io_error_code ec;
-  auto results = co_await net.resolve(resolver, ep.remote, ec);
-  if (timeoutflag)
-    throw timeout_exception();
-
-  if (results.empty() || ec)
-    throw network_exception("[TCP] cannot resolve host: {}, err: {}", ep.remote.to_string(), ec.message());
-  tcp::socket tcp_sock(self.ioctx);
-
-  timer.cancel();
-  timer.arm(deadline);
-  timer.set_callback([&](bool canceled) {
-    if (!canceled) {
-      timeoutflag = true;
-      noexport::close_tcp_sock(tcp_sock);
-    }
-  });
-  if (ep.local) {
-    tcp_sock.open(ep.local->protocol());
-    tcp_sock.bind(*ep.local);
-  }
-  co_await net.connect(tcp_sock, results, ec);
-
-  if (ec)
-    throw network_exception("[TCP] cannot connect to {}, err: {}", ep.remote.to_string(), ec.message());
-  if (self.starter)
-    co_await self.starter(tcp_sock, deadline);
-  apply_tcp_options(tcp_sock, self.options);
-  co_return make_tcp_connection(std::move(tcp_sock), self.options, self);
-}
-
-asio_io::asio_io(tcp_connection_options opts, starter_t s) : options(std::move(opts)), starter(std::move(s)) {
-}
-
-dd::task<any_connection_t> asio_io::create_connection_client(remote_and_local_endpoints ep,
-                                                             deadline_t deadline) {
-  return do_create_connection_client(*this, ep, deadline);
-}
-
-struct asio_acceptor {
-  boost::asio::ip::tcp::acceptor a;
-  tcp_connection_options options;
-  // контекст, создавший acceptor (для buffered_connection)
-  any_io_context_ref io;
-
-  internet_address get_local_endpoint() const {
-    return a.local_endpoint();
-  }
-
-  internet_address listen() {
-    a.listen();
-    return get_local_endpoint();
-  }
-
-  dd::task<any_connection_t> accept(io_error_code& ec) {
-    asio::ip::tcp::socket socket(a.get_executor());
-    co_await net.accept(a, socket, ec);
-    if (ec)
-      co_return nullptr;
-    apply_tcp_options(socket, options);
-    co_return make_tcp_connection(std::move(socket), options, io);
-  }
-
-  void close() {
-    return a.close();
-  }
-};
-
-any_acceptor asio_io::create_acceptor(internet_address addr, bool reuse_address) {
-  return asio_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address}, options, *this};
-}
-
-void asio_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_tcp_context<asio_io>(con, other);
-}
-
-asio_ref_io::asio_ref_io(asio::io_context& ctx, tcp_connection_options opts, starter_t s)
-    : asio_io_ref_base(ctx), options(std::move(opts)), starter(std::move(s)) {
-}
-
-dd::task<any_connection_t> asio_ref_io::create_connection_client(remote_and_local_endpoints ep,
-                                                                 deadline_t deadline) {
-  return do_create_connection_client(*this, ep, deadline);
-}
-
-any_acceptor asio_ref_io::create_acceptor(internet_address addr, bool reuse_address) {
-  return asio_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address}, options, *this};
-}
-
-void asio_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_tcp_context<asio_ref_io>(con, other);
-}
-
-// TLS
-
 // создаёт и настраивает клиентское TLS соединение. Handshake делает вызывающий (connection_i::handshake),
 // чтобы его можно было прервать через shutdown
-static any_connection_t make_client_tls_connection(auto& self, asio::ip::tcp::socket tcp_sock,
-                                                   const remote_and_local_endpoints& ep) {
+static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_sock, ssl_context_ptr sslctx,
+                                                   const tcp_connection_options& opts,
+                                                   const remote_and_local_endpoints& ep,
+                                                   any_io_context_ref io) {
   namespace ssl = asio::ssl;
-  std::unique_ptr<asio_tls_connection> res(new asio_tls_connection(std::move(tcp_sock), self.client_sslctx));
-  if (self.options.host_for_name_verification) {
+  std::unique_ptr<asio_tls_connection> res(new asio_tls_connection(std::move(tcp_sock), std::move(sslctx)));
+  if (opts.host_for_name_verification) {
     res->sock.set_verify_mode(ssl::verify_peer);
-    res->sock.set_verify_callback(
-        asio::ssl::host_name_verification(*self.options.host_for_name_verification));
+    res->sock.set_verify_callback(asio::ssl::host_name_verification(*opts.host_for_name_verification));
   } else {
     res->sock.set_verify_mode(ssl::verify_none);
   }
-  if (!self.options.is_primal_connection)
+  if (!opts.is_primal_connection)
     SSL_set_mode(res->sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
   // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
   // SNI, по RFC 6066 только для доменного имени, не для IP адреса
@@ -360,11 +245,13 @@ static any_connection_t make_client_tls_connection(auto& self, asio::ip::tcp::so
     if (ipec && !SSL_set_tlsext_host_name(res->sock.native_handle(), host->c_str()))
       throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
   }
-  return maybe_buffered(any_connection_t(std::move(res)), self.options.buffer_writes, self);
+  return maybe_buffered(any_connection_t(std::move(res)), opts.buffer_writes, io);
 }
 
-static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, remote_and_local_endpoints ep,
-                                                                  deadline_t deadline) {
+static dd::task<any_connection_t> do_create_connection_client(auto& self, remote_and_local_endpoints ep,
+                                                              deadline_t deadline,
+                                                              tcp_connection_options opts,
+                                                              client_ssl_context_ptr ssl) {
   using tcp = asio::ip::tcp;
 
   tcp::resolver resolver(self.ioctx);
@@ -386,7 +273,7 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
     throw timeout_exception();
   if (results.empty() || ec)
     throw network_exception("[TCP] cannot resolve host: {}, err: {}", ep.remote.to_string(), ec.message());
-  asio::ip::tcp::socket tcp_sock(self.ioctx);
+  tcp::socket tcp_sock(self.ioctx);
 
   timer.cancel();
   timer.arm(deadline);
@@ -408,33 +295,19 @@ static dd::task<any_connection_t> do_create_connection_client_tls(auto& self, re
     throw network_exception("[TCP] cannot connect to {}, err: {}", ep.remote.to_string(), ec.message());
   if (self.starter)
     co_await self.starter(tcp_sock, deadline);
-  // таймер мог сработать во время starter и закрыть сокет. Таймаут handshake - забота вызывающего (см.
+  // таймер мог сработать во время starter и закрыть сокет. Таймаут TLS handshake - забота вызывающего (см.
   // connection_i::handshake)
   if (timeoutflag)
     throw timeout_exception();
-  apply_tcp_options(tcp_sock, self.options);
-  if (!self.client_sslctx)
-    self.client_sslctx = make_ssl_context_for_client(self.options.additional_ssl_certificates).p;
-  co_return make_client_tls_connection(self, std::move(tcp_sock), ep);
+  apply_tcp_options(tcp_sock, opts);
+  if (ssl)
+    co_return make_client_tls_connection(std::move(tcp_sock), std::move(ssl.p), opts, ep, self);
+  co_return make_tcp_connection(std::move(tcp_sock), opts, self);
 }
 
-asio_tls_io::asio_tls_io(client_ssl_context_ptr ctx, tcp_connection_options opts, starter_t s)
-    : asio_io_base(), options(std::move(opts)), client_sslctx(std::move(ctx.p)), starter(std::move(s)) {
-  assert(client_sslctx != nullptr);
-}
-
-asio_tls_io::asio_tls_io(server_ssl_context_ptr ctx, tcp_connection_options opts, starter_t s)
-    : asio_io_base(), options(std::move(opts)), server_sslctx(std::move(ctx.p)), starter(std::move(s)) {
-  assert(server_sslctx != nullptr);
-}
-
-dd::task<any_connection_t> asio_tls_io::create_connection_client(remote_and_local_endpoints endpoint,
-                                                                 deadline_t deadline) {
-  return do_create_connection_client_tls(*this, endpoint, deadline);
-}
-
-struct asio_tls_acceptor {
+struct asio_acceptor {
   boost::asio::ip::tcp::acceptor a;
+  // nullptr - без TLS
   ssl_context_ptr sslctx;
   tcp_connection_options options;
   // контекст, создавший acceptor (для buffered_connection)
@@ -457,7 +330,9 @@ struct asio_tls_acceptor {
       co_return nullptr;
     apply_tcp_options(socket, options);
     // TLS handshake делает сервер через connection_i::handshake
-    co_return make_tls_connection(std::move(socket), sslctx, options, io);
+    if (sslctx)
+      co_return make_tls_connection(std::move(socket), sslctx, options, io);
+    co_return make_tcp_connection(std::move(socket), options, io);
   }
 
   void close() {
@@ -465,47 +340,47 @@ struct asio_tls_acceptor {
   }
 };
 
-any_acceptor asio_tls_io::create_acceptor(internet_address addr, bool reuse_address) {
-  assert(server_sslctx);
-  return asio_tls_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address},
-                           server_sslctx, options, *this};
+static any_acceptor do_create_acceptor(auto& self, internet_address addr, bool reuse_address,
+                                       tcp_connection_options opts, server_ssl_context_ptr ssl) {
+  return asio_acceptor{boost::asio::ip::tcp::acceptor{self.ioctx, std::move(addr), reuse_address},
+                       std::move(ssl.p), std::move(opts), self};
 }
 
-void asio_tls_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_tls_context<asio_tls_io>(con, other);
+asio_io::asio_io(starter_t s) : starter(std::move(s)) {
 }
 
-asio_tls_ref_io::asio_tls_ref_io(asio::io_context& ctx, client_ssl_context_ptr ssl,
-                                 tcp_connection_options opts, starter_t s)
-    : asio_io_ref_base(ctx),
-      options(std::move(opts)),
-      client_sslctx(std::move(ssl.p)),
-      starter(std::move(s)) {
-  assert(client_sslctx != nullptr);
+dd::task<any_connection_t> asio_io::create_connection_client(remote_and_local_endpoints ep,
+                                                             deadline_t deadline, tcp_connection_options opts,
+                                                             client_ssl_context_ptr ssl) {
+  return do_create_connection_client(*this, std::move(ep), deadline, std::move(opts), std::move(ssl));
 }
 
-asio_tls_ref_io::asio_tls_ref_io(asio::io_context& ctx, server_ssl_context_ptr ssl,
-                                 tcp_connection_options opts, starter_t s)
-    : asio_io_ref_base(ctx),
-      options(std::move(opts)),
-      server_sslctx(std::move(ssl.p)),
-      starter(std::move(s)) {
-  assert(server_sslctx != nullptr);
+any_acceptor asio_io::create_acceptor(internet_address addr, bool reuse_address, tcp_connection_options opts,
+                                      server_ssl_context_ptr ssl) {
+  return do_create_acceptor(*this, std::move(addr), reuse_address, std::move(opts), std::move(ssl));
 }
 
-any_acceptor asio_tls_ref_io::create_acceptor(internet_address addr, bool reuse_address) {
-  assert(server_sslctx);
-  return asio_tls_acceptor{boost::asio::ip::tcp::acceptor{ioctx, std::move(addr), reuse_address},
-                           server_sslctx, options, *this};
+void asio_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
+  do_rebind_context(con, aa::any_cast<asio_io&>(other).ioctx, other);
 }
 
-dd::task<any_connection_t> asio_tls_ref_io::create_connection_client(remote_and_local_endpoints endpoint,
-                                                                     deadline_t deadline) {
-  return do_create_connection_client_tls(*this, endpoint, deadline);
+asio_ref_io::asio_ref_io(asio::io_context& ctx, starter_t s) : asio_io_ref_base(ctx), starter(std::move(s)) {
 }
 
-void asio_tls_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_tls_context<asio_tls_ref_io>(con, other);
+dd::task<any_connection_t> asio_ref_io::create_connection_client(remote_and_local_endpoints ep,
+                                                                 deadline_t deadline,
+                                                                 tcp_connection_options opts,
+                                                                 client_ssl_context_ptr ssl) {
+  return do_create_connection_client(*this, std::move(ep), deadline, std::move(opts), std::move(ssl));
+}
+
+any_acceptor asio_ref_io::create_acceptor(internet_address addr, bool reuse_address,
+                                          tcp_connection_options opts, server_ssl_context_ptr ssl) {
+  return do_create_acceptor(*this, std::move(addr), reuse_address, std::move(opts), std::move(ssl));
+}
+
+void asio_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
+  do_rebind_context(con, aa::any_cast<asio_ref_io&>(other).ioctx, other);
 }
 
 }  // namespace hidi

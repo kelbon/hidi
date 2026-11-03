@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include "hidi/tcp_connection_options.hpp"
+
 #include "hidi/h2protocol.hpp"
 #include "hidi/utils/deadline.hpp"
 #include "hidi/utils/unique_name.hpp"
@@ -34,6 +36,8 @@ struct h2client_options {
   // SETTINGS_INITIAL_WINDOW_SIZE: сколько байт тела собеседник может прислать в стрим без подтверждения
   // Note: ограничивает скорость одного стрима величиной окно / RTT
   uint32_t stream_window_size = MAX_WINDOW_SIZE;
+  // параметры TCP соединений (в том числе TLS: проверка имени хоста)
+  tcp_connection_options tcp = {};
   log_context logctx = {};
 };
 

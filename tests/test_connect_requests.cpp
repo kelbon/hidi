@@ -99,10 +99,10 @@ inline const asio::ip::tcp::endpoint addr(asio::ip::address_v6::loopback(), 8080
 inline fuzzing::fuzzer fuz;
 
 static void test_connect_requests() {
-  bistream_test_server server(h2server_options{.idle_timeout = std::chrono::seconds(50000)});
+  bistream_test_server server(nullptr, h2server_options{.idle_timeout = std::chrono::seconds(50000)});
 
   server.listen(server_endpoint{.addr = addr, .reuse_address = true});
-  h2client client(addr, {.ping_interval = duration_t::max(), .allow_requests_before_server_settings = true});
+  h2client client(addr, nullptr, {.ping_interval = duration_t::max(), .allow_requests_before_server_settings = true});
   run_requests(client, 100, addr).start_and_detach();
 
   fuz.run_until([] { return done.load(); }, server.ioctx(), client.ioctx());
@@ -198,14 +198,14 @@ static void test_rst_stream() {
   {
     std::shared_ptr server = std::make_shared<wait_rst_server>();
     server->listen({addr});
-    h2client client(addr, {.allow_requests_before_server_settings = false});
+    h2client client(addr, nullptr, {.allow_requests_before_server_settings = false});
 
     test_rst_stream(std::move(server), client);
   }
   {
     std::shared_ptr server = std::make_shared<wait_rst_server>();
     server->listen({addr});
-    h2client client(addr, {.allow_requests_before_server_settings = true});
+    h2client client(addr, nullptr, {.allow_requests_before_server_settings = true});
     test_rst_stream(std::move(server), client);
   }
   // with connection before
@@ -213,7 +213,7 @@ static void test_rst_stream() {
     std::shared_ptr server = std::make_shared<wait_rst_server>();
     server->listen({addr});
 
-    h2client client(addr, {.allow_requests_before_server_settings = false});
+    h2client client(addr, nullptr, {.allow_requests_before_server_settings = false});
     auto h = client.try_connect().start_and_detach(/*stop_at_end=*/true);
     while (!h.done()) {
       client.ioctx().poll_one();
@@ -228,7 +228,7 @@ static void test_rst_stream() {
     std::shared_ptr server = std::make_shared<wait_rst_server>();
     server->listen({addr});
 
-    h2client client(addr, {.allow_requests_before_server_settings = true});
+    h2client client(addr, nullptr, {.allow_requests_before_server_settings = true});
     auto h = client.try_connect().start_and_detach(/*stop_at_end=*/true);
     while (!h.done()) {
       client.ioctx().poll_one();

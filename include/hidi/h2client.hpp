@@ -81,6 +81,8 @@ struct h2client {
   endpoint m_remote;
   std::optional<internet_address> m_local;
   h2client_options m_options;
+  // nullptr - без TLS
+  client_ssl_context_ptr m_ssl;
   h2connection_ptr m_connection;
 
   // while connection is not ready all new streams wait for it
@@ -122,11 +124,12 @@ struct h2client {
  public:
   // 'remote' used for connecting when required
   // by default creates localhost client
-  // creates non-tls client by default
-  // example of creating tls client:
-  //   h2client myclient(host, h2client_options{}, make_asio_tls_io_context());
-  explicit h2client(endpoint remote = endpoint(asio::ip::address_v4::loopback()), h2client_options opts = {},
-                    any_io_context = make_asio_io_context());
+  // `ssl` == nullptr - без TLS. TLS client:
+  //   h2client myclient(host, make_ssl_context_for_client({}));
+  // `io` - цикл событий и фабрика соединений, обычно его не нужно менять
+  explicit h2client(endpoint remote = endpoint(asio::ip::address_v4::loopback()),
+                    client_ssl_context_ptr ssl = nullptr, h2client_options opts = {},
+                    any_io_context io = make_asio_io_context());
 
   h2client(h2client&&) = delete;
   void operator=(h2client&&) = delete;

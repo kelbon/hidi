@@ -45,7 +45,7 @@ static dd::task<void> receive_request_headers(test_h2connection& server, stream_
 
 // соединение работает: следующий запрос получает ответ
 static dd::task<void> next_request_works(h2client& client, test_h2connection& server, stream_id_t streamid,
-                                         any_io_context_ref ioctx) {
+                                         test_io ioctx) {
   auto h = client.send_request(make_request(client, http_method_e::GET), deadline_after(5s))
                .start_and_detach(true);
   on_scope_exit {
@@ -310,7 +310,7 @@ struct handler_server : h2server {
 
 // исключение из обработчика сбрасывает только его стрим: обычное - INTERNAL_ERROR, stream_error - своим кодом
 static dd::task<void> handler_exceptions_body(handler_server&, internet_address addr,
-                                              any_io_context_ref ioctx) {
+                                              test_io ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
   co_await client.send_req(1, get_headers(addr, "/runtime_error"));
@@ -330,7 +330,7 @@ TEST("handler exception resets its stream") {
 
 // клиент закрыл соединение, пока обработчик работает: обработчик видит отмену, сессия завершается
 static dd::task<void> connection_closed_while_handling_body(handler_server& server, internet_address addr,
-                                                            any_io_context_ref ioctx) {
+                                                            test_io ioctx) {
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
   co_await client.send_req(1, get_headers(addr, "/wait_cancel"));

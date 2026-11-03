@@ -167,8 +167,7 @@ int main() try {
 
   namespace asio = boost::asio;
 
-  hidi::h2client client(endpoint("localhost", 8080), {},
-                        make_asio_tls_io_context(make_ssl_context_for_client({})));
+  hidi::h2client client(endpoint("localhost", 8080), make_ssl_context_for_client({}));
 
   test_server server(HTTP2_TLS_DIR "/test_server.crt", HTTP2_TLS_DIR "/test_server.key");
 
