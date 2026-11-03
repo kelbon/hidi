@@ -169,7 +169,7 @@ int main() try {
   namespace asio = boost::asio;
 
   h2client_options opts{};
-  h2client client(endpoint("localhost", 8080), std::move(opts));
+  h2client client(endpoint("localhost", 8080), nullptr, std::move(opts));
 
   test_server server(nullptr /*no https*/, {});
 

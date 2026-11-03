@@ -13,7 +13,6 @@ struct tcp_connection_options {
   // (в Linux явно заданный размер отключает автоматическую подстройку буфера)
   std::optional<uint32_t> send_buffer_size = std::nullopt;
   std::optional<uint32_t> receive_buffer_size = std::nullopt;
-  std::vector<std::filesystem::path> additional_ssl_certificates;
   // adds delay (waiting for new requests to merge them)
   bool merge_small_requests = false;
   // true - запись не идёт в сокет сразу, а копируется в буфер соединения и отправляется одной записью в конце
@@ -26,8 +25,8 @@ struct tcp_connection_options {
   bool is_primal_connection = true;
   /*
     if unset, SSL host name verification disabled.
-    On windows it (likely) will produce errors until you set
-    'additional_ssl_certificates'
+    On windows it (likely) will produce errors until you add certificates in
+    make_ssl_context_for_client(additional_certs)
 
     if you are receiving error with ssl hanfshake,
     add verify path for your certificate, specially on windows, where default path may be unreachable

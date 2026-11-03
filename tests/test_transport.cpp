@@ -20,11 +20,12 @@ static dd::task<void> write_until_error(any_connection_t& con, io_error_code& ec
 // (с буферизацией ждёт отправки принятого, но не дольше buffered_connection::DRAIN_TIMEOUT)
 TRANSPORT_TEST("shutdown does not wait for blocked write") {
   bool buffer_writes = GENERATE(false, true);
-  any_io_context ioctx = make_asio_io_context(rawio, tcp_connection_options{.buffer_writes = buffer_writes});
-  any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true);
+  any_io_context ioctx = make_asio_io_context(rawio);
+  tcp_connection_options opts{.buffer_writes = buffer_writes};
+  any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true, opts, nullptr);
   a.listen();
   any_connection_t peer =
-      co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
+      co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s), opts, nullptr);
   io_error_code ec;
   co_await peer->handshake(ec, /*is_client=*/true);
   REQUIRE(!ec);
@@ -114,11 +115,11 @@ static dd::job shutdown_connection(any_connection_t& con, bool& done) {
 // сервер принял TCP соединение, но не отвечает на TLS handshake. Клиентский handshake прерывается через
 // shutdown (так его прерывают таймаут соединения и graceful_stop клиента)
 TRANSPORT_TEST("client TLS handshake is interrupted by shutdown") {
-  any_io_context ioctx = make_asio_tls_io_context(rawio, make_ssl_context_for_client({}));
+  any_io_context ioctx = make_asio_io_context(rawio);
   boost::asio::ip::tcp::acceptor silent(rawio, localhost());
   silent.listen();
-  any_connection_t con =
-      co_await ioctx.create_connection_client({silent.local_endpoint()}, deadline_after(5s));
+  any_connection_t con = co_await ioctx.create_connection_client(
+      {silent.local_endpoint()}, deadline_after(5s), {}, make_ssl_context_for_client({}));
   bool shutdown_done = false;
   any_timer timer = ioctx.create_timer();
   timer.set_callback([&](bool canceled) {
@@ -168,7 +169,7 @@ static dd::task<std::string> alpn_selected_by_server(any_io_context& io, interne
   sslctx.set_verify_mode(ssl::verify_none);
   if (!offer.empty())
     REQUIRE(0 == SSL_CTX_set_alpn_protos(sslctx.native_handle(), offer.data(), offer.size()));
-  ssl::stream<boost::asio::ip::tcp::socket> sock(aa::any_cast<asio_tls_io&>(io).ioctx, sslctx);
+  ssl::stream<boost::asio::ip::tcp::socket> sock(aa::any_cast<asio_io&>(io).ioctx, sslctx);
   // соединение попадает в очередь listen, даже пока сервер не вызвал accept
   sock.lowest_layer().connect(addr);
   io_error_code ec;
@@ -246,8 +247,8 @@ TRANSPORT_TEST("write under backpressure") {
   }
   tcp_connection_options opts{.send_buffer_size = SMALL_SOCKET_BUFFER,
                               .receive_buffer_size = SMALL_SOCKET_BUFFER};
-  any_io_context ioctx = tls ? make_asio_tls_io_context(rawio, make_ssl_context_for_client({}), opts)
-                             : make_asio_io_context(rawio, opts);
+  any_io_context ioctx = make_asio_io_context(rawio);
+  client_ssl_context_ptr client_ssl = tls ? make_ssl_context_for_client({}) : nullptr;
   boost::asio::ip::tcp::acceptor a(rawio, localhost());
   // принятые соединения наследуют размер буфера от слушающего сокета
   a.set_option(boost::asio::socket_base::receive_buffer_size(SMALL_SOCKET_BUFFER));
@@ -255,7 +256,8 @@ TRANSPORT_TEST("write under backpressure") {
   any_connection_t reader;
   bool accepted = false;
   accept_raw(a, tls ? test_server_ssl_ctx().p : nullptr, reader, accepted).start_and_detach();
-  any_connection_t writer = co_await ioctx.create_connection_client({a.local_endpoint()}, deadline_after(5s));
+  any_connection_t writer =
+      co_await ioctx.create_connection_client({a.local_endpoint()}, deadline_after(5s), opts, client_ssl);
   {
     io_error_code ec;
     co_await writer->handshake(ec, /*is_client=*/true);
@@ -297,7 +299,7 @@ static dd::task<void> accept_and_get_sni(boost::asio::ip::tcp::acceptor& a, boos
 // клиент передаёт SNI, если подключается по доменному имени
 // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
 TRANSPORT_TEST("client sends SNI") {
-  any_io_context ioctx = make_asio_tls_io_context(rawio, make_ssl_context_for_client({}));
+  any_io_context ioctx = make_asio_io_context(rawio);
   boost::asio::ip::tcp::acceptor a(rawio, localhost());
   a.listen();
   endpoint target;
@@ -314,7 +316,8 @@ TRANSPORT_TEST("client sends SNI") {
   std::string sni = "not set";
   bool done = false;
   accept_and_get_sni(a, server_sslctx->ctx, sni, done).start_and_detach();
-  any_connection_t con = co_await ioctx.create_connection_client({target}, deadline_after(5s));
+  any_connection_t con = co_await ioctx.create_connection_client({target}, deadline_after(5s), {},
+                                                                 make_ssl_context_for_client({}));
   io_error_code ec;
   co_await con->handshake(ec, /*is_client=*/true);
   REQUIRE(!ec);
@@ -363,15 +366,13 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
   SECTION("TLS") {
     tls = true;
   }
-  any_io_context ioctx =
-      tls ? make_asio_tls_io_context(rawio, test_server_ssl_ctx()) : make_asio_io_context(rawio);
-  any_io_context target =
-      tls ? make_asio_tls_io_context(other, test_server_ssl_ctx()) : make_asio_io_context(other);
-  any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true);
+  any_io_context ioctx = make_asio_io_context(rawio);
+  any_io_context target = make_asio_io_context(other);
+  any_acceptor a =
+      ioctx.create_acceptor(localhost(), /*reuse_address=*/true, {}, tls ? test_server_ssl_ctx() : nullptr);
   a.listen();
-  any_io_context plain = make_asio_io_context(rawio);
   any_connection_t peer =
-      co_await plain.create_connection_client({a.get_local_endpoint()}, deadline_after(5s));
+      co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s), {}, nullptr);
   io_error_code ec;
   any_connection_t con = co_await a.accept(ec);
   REQUIRE(!ec);

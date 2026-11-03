@@ -26,15 +26,14 @@ int main() try {
   fuzzer fuz;
   hidi::h2server_options opts;
   opts.max_concurrent_streams = 10;
-  hidi::echo_server server(opts);
+  hidi::echo_server server(nullptr, opts);
 
   asio::ip::tcp::endpoint ipv6_endpoint(asio::ip::address_v6::loopback(), 8080);
   server.listen(hidi::server_endpoint{.addr = ipv6_endpoint, .reuse_address = true});
 
-  hidi::h2client client1(ipv6_endpoint,
+  hidi::h2client client1(ipv6_endpoint, nullptr,
                          {// avoid sending too many requests because server sets max concurrent streams == 10
-                          .allow_requests_before_server_settings = false},
-                         hidi::make_asio_io_context());
+                          .allow_requests_before_server_settings = false});
 
   clone_reqtem tem;
   auto& r = tem.req;

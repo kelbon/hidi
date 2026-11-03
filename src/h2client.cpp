@@ -144,8 +144,8 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
         self->m_connection = new_connection;
         self->notify_connection_waiters(new_connection);
       };
-      any_connection_t tcpcon =
-          co_await self->m_ioctx.create_connection_client({self->m_remote, self->m_local}, deadline);
+      any_connection_t tcpcon = co_await self->m_ioctx.create_connection_client(
+          {self->m_remote, self->m_local}, deadline, self->m_options.tcp, self->m_ssl);
       h2connection_ptr con = new h2connection(std::move(tcpcon), *&self->ioctx());
 
       con->logctx.lvl = self->m_options.logctx.lvl;
@@ -418,8 +418,8 @@ h2client::~h2client() {
   assert(m_requestsInProgress == 0);
 }
 
-h2client::h2client(endpoint remote, h2client_options opts, any_io_context io)
-    : m_remote(std::move(remote)), m_options(opts), m_ioctx(std::move(io)) {
+h2client::h2client(endpoint remote, client_ssl_context_ptr ssl, h2client_options opts, any_io_context io)
+    : m_ioctx(std::move(io)), m_remote(std::move(remote)), m_options(opts), m_ssl(std::move(ssl)) {
   assert(m_ioctx);
   m_options.logctx.name.set_prefix(CLIENT_PREFIX);
   m_options.max_receive_frame_size = std::min(FRAME_LEN_MAX, m_options.max_receive_frame_size);

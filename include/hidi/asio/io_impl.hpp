@@ -150,26 +150,29 @@ struct asio_io_ref_base {
 };
 
 struct asio_io : asio_io_base {
-  tcp_connection_options options;
-  // invoked after tcp handshake, may set socket options etc
+  // invoked after tcp handshake (before TLS), may set socket options etc
   starter_t starter;
 
-  explicit asio_io(tcp_connection_options = {}, starter_t = {});
+  explicit asio_io(starter_t = {});
 
-  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t);
-  any_acceptor create_acceptor(internet_address, bool reuse_address);
+  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t,
+                                                      tcp_connection_options, client_ssl_context_ptr);
+  any_acceptor create_acceptor(internet_address, bool reuse_address, tcp_connection_options,
+                               server_ssl_context_ptr);
   static void rebind_context(any_connection_t& con, any_io_context_ref other);
 };
 
+// не владеет asio::io_context
 struct asio_ref_io : asio_io_ref_base {
-  tcp_connection_options options;
-  // invoked after tcp handshake, may set socket options etc
+  // invoked after tcp handshake (before TLS), may set socket options etc
   starter_t starter;
 
-  explicit asio_ref_io(asio::io_context&, tcp_connection_options = {}, starter_t = {});
+  explicit asio_ref_io(asio::io_context&, starter_t = {});
 
-  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t);
-  any_acceptor create_acceptor(internet_address, bool reuse_address);
+  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t,
+                                                      tcp_connection_options, client_ssl_context_ptr);
+  any_acceptor create_acceptor(internet_address, bool reuse_address, tcp_connection_options,
+                               server_ssl_context_ptr);
   static void rebind_context(any_connection_t& con, any_io_context_ref other);
 };
 
@@ -191,45 +194,6 @@ struct asio_tls_connection : connection_i {
   bool is_https() override {
     return true;
   }
-};
-
-struct asio_tls_io : asio_io_base {
-  tcp_connection_options options;
-  // invoked after tcp handshake (before TLS), may set socket options etc
-  starter_t starter;
-  // must be setted for server
-  ssl_context_ptr server_sslctx = nullptr;
-  // optional for client
-  ssl_context_ptr client_sslctx = nullptr;
-
-  // pre: ctx != nullptr
-  asio_tls_io(client_ssl_context_ptr ctx, tcp_connection_options = {}, starter_t = {});
-  // pre: ctx != nullptr
-  asio_tls_io(server_ssl_context_ptr ctx, tcp_connection_options = {}, starter_t = {});
-
-  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t);
-  any_acceptor create_acceptor(internet_address, bool reuse_address);
-  static void rebind_context(any_connection_t& con, any_io_context_ref other);
-};
-
-struct asio_tls_ref_io : asio_io_ref_base {
-  tcp_connection_options options;
-  // invoked after tcp handshake (before TLS), may set socket options etc
-  starter_t starter;
-  // must be setted for server
-  ssl_context_ptr server_sslctx = nullptr;
-  // optional for client
-  ssl_context_ptr client_sslctx = nullptr;
-
-  // pre: ctx != nullptr
-  asio_tls_ref_io(asio::io_context&, client_ssl_context_ptr ctx, tcp_connection_options = {}, starter_t = {});
-
-  // pre: ctx != nullptr
-  asio_tls_ref_io(asio::io_context&, server_ssl_context_ptr ctx, tcp_connection_options = {}, starter_t = {});
-
-  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t);
-  any_acceptor create_acceptor(internet_address, bool reuse_address);
-  static void rebind_context(any_connection_t& con, any_io_context_ref other);
 };
 
 }  // namespace hidi

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hidi/asio/ssl_context.hpp"
+#include "hidi/asio/io.hpp"
 #include "hidi/h2server_options.hpp"
 #include "hidi/http_base.hpp"
 #include "hidi/tcp_connection_options.hpp"
@@ -29,19 +30,10 @@ struct h2server {
   void set_accept_callback(move_only_fn<void(any_connection_t)>);
 
  public:
-  // creates non-tls server
-  // uses asio_io
-  explicit h2server(h2server_options options = {});
-
-  // pre: c.has_value() == true
-  explicit h2server(h2server_options, any_io_context c);
-
-  // creates non-tls server with tcp options (e.g. tcp_connection_options::buffer_writes)
-  h2server(h2server_options, tcp_connection_options);
-
-  // if ssl context ptr is nullptr, then its http server (not https)
-  // uses asio_io/asio_tls_io
-  explicit h2server(server_ssl_context_ptr, h2server_options = {}, tcp_connection_options = {});
+  // `ssl` == nullptr - без TLS. TLS сервер: h2server(make_ssl_context_for_server(cert, key))
+  // `io` - цикл событий и фабрика соединений, обычно его не нужно менять
+  explicit h2server(server_ssl_context_ptr ssl = nullptr, h2server_options = {},
+                    any_io_context io = make_asio_io_context());
 
   h2server(std::filesystem::path certificate, std::filesystem::path server_private_key,
            h2server_options opts = {})
