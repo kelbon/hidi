@@ -346,25 +346,7 @@ static any_acceptor do_create_acceptor(auto& self, internet_address addr, bool r
                        std::move(ssl.p), std::move(opts), self};
 }
 
-asio_io::asio_io(starter_t s) : starter(std::move(s)) {
-}
-
-dd::task<any_connection_t> asio_io::create_connection_client(remote_and_local_endpoints ep,
-                                                             deadline_t deadline, tcp_connection_options opts,
-                                                             client_ssl_context_ptr ssl) {
-  return do_create_connection_client(*this, std::move(ep), deadline, std::move(opts), std::move(ssl));
-}
-
-any_acceptor asio_io::create_acceptor(internet_address addr, bool reuse_address, tcp_connection_options opts,
-                                      server_ssl_context_ptr ssl) {
-  return do_create_acceptor(*this, std::move(addr), reuse_address, std::move(opts), std::move(ssl));
-}
-
-void asio_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_context(con, aa::any_cast<asio_io&>(other).ioctx, other);
-}
-
-asio_ref_io::asio_ref_io(asio::io_context& ctx, starter_t s) : asio_io_ref_base(ctx), starter(std::move(s)) {
+asio_ref_io::asio_ref_io(asio::io_context& ctx, starter_t s) : ioctx(ctx), starter(std::move(s)) {
 }
 
 dd::task<any_connection_t> asio_ref_io::create_connection_client(remote_and_local_endpoints ep,
@@ -381,6 +363,13 @@ any_acceptor asio_ref_io::create_acceptor(internet_address addr, bool reuse_addr
 
 void asio_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
   do_rebind_context(con, aa::any_cast<asio_ref_io&>(other).ioctx, other);
+}
+
+asio_io::asio_io(starter_t s) : asio_ref_io(owned, std::move(s)) {
+}
+
+void asio_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
+  do_rebind_context(con, aa::any_cast<asio_io&>(other).ioctx, other);
 }
 
 }  // namespace hidi
