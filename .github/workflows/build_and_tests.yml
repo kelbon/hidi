@@ -21,7 +21,7 @@ jobs:
         compiler:
           - { cxx: g++-13, c: gcc-13 }
           - { cxx: clang++-18, c: clang-18 }
-        cpp_standard: [20]
+        cpp_standard: [20, 23]
         build_type: [Debug, Release]
     runs-on: ${{matrix.os}}
     env:
