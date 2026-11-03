@@ -71,89 +71,49 @@ struct asio_connection : connection_i {
   }
 };
 
-struct asio_io_base {
-  asio::io_context ioctx;
-
-  bool poll_one() {
-    return ioctx.poll_one() > 0;
-  }
-
-  size_t poll() {
-    return ioctx.poll();
-  }
-  size_t run() {
-    return ioctx.run();
-  }
-  void stop() {
-    return ioctx.stop();
-  }
-  bool stopped() {
-    return ioctx.stopped();
-  }
-  void restart() {
-    return ioctx.restart();
-  }
-  any_timer create_timer() {
-    return asio_timer(ioctx);
-  }
-  void attach(dd::task_node* n) {
-    boost::asio::post(ioctx, n->task);
-  }
-  bool running_in_this_thread() {
-    return ioctx.get_executor().running_in_this_thread();
-  }
-  void start_task() {
-    ioctx.get_executor().on_work_started();
-  }
-  void end_task() {
-    ioctx.get_executor().on_work_finished();
-  }
-};
-
-struct asio_io_ref_base {
+// контекст на asio::io_context, которым не владеет. TLS или нет и параметры TCP - аргументы
+// create_connection_client / create_acceptor
+struct asio_ref_io {
   asio::io_context& ioctx;
-
-  bool poll_one() {
-    return ioctx.poll_one() > 0;
-  }
-
-  size_t poll() {
-    return ioctx.poll();
-  }
-  size_t run() {
-    return ioctx.run();
-  }
-  void stop() {
-    return ioctx.stop();
-  }
-  bool stopped() {
-    return ioctx.stopped();
-  }
-  void restart() {
-    return ioctx.restart();
-  }
-  any_timer create_timer() {
-    return asio_timer(ioctx);
-  }
-  void attach(dd::task_node* n) {
-    boost::asio::post(ioctx, n->task);
-  }
-  bool running_in_this_thread() {
-    return ioctx.get_executor().running_in_this_thread();
-  }
-  void start_task() {
-    ioctx.get_executor().on_work_started();
-  }
-  void end_task() {
-    ioctx.get_executor().on_work_finished();
-  }
-};
-
-struct asio_io : asio_io_base {
   // invoked after tcp handshake (before TLS), may set socket options etc
   starter_t starter;
 
-  explicit asio_io(starter_t = {});
+  explicit asio_ref_io(asio::io_context&, starter_t = {});
+
+  bool poll_one() {
+    return ioctx.poll_one() > 0;
+  }
+
+  size_t poll() {
+    return ioctx.poll();
+  }
+  size_t run() {
+    return ioctx.run();
+  }
+  void stop() {
+    return ioctx.stop();
+  }
+  bool stopped() {
+    return ioctx.stopped();
+  }
+  void restart() {
+    return ioctx.restart();
+  }
+  any_timer create_timer() {
+    return asio_timer(ioctx);
+  }
+  void attach(dd::task_node* n) {
+    boost::asio::post(ioctx, n->task);
+  }
+  bool running_in_this_thread() {
+    return ioctx.get_executor().running_in_this_thread();
+  }
+  void start_task() {
+    ioctx.get_executor().on_work_started();
+  }
+  void end_task() {
+    ioctx.get_executor().on_work_finished();
+  }
 
   dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t,
                                                       tcp_connection_options, client_ssl_context_ptr);
@@ -162,17 +122,18 @@ struct asio_io : asio_io_base {
   static void rebind_context(any_connection_t& con, any_io_context_ref other);
 };
 
-// не владеет asio::io_context
-struct asio_ref_io : asio_io_ref_base {
-  // invoked after tcp handshake (before TLS), may set socket options etc
-  starter_t starter;
+namespace noexport {
+// для порядка инициализиации
+struct asio_io_holder {
+  asio::io_context owned;
+};
 
-  explicit asio_ref_io(asio::io_context&, starter_t = {});
+}  // namespace noexport
 
-  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t,
-                                                      tcp_connection_options, client_ssl_context_ptr);
-  any_acceptor create_acceptor(internet_address, bool reuse_address, tcp_connection_options,
-                               server_ssl_context_ptr);
+// то же, владеет asio::io_context
+struct asio_io : noexport::asio_io_holder, asio_ref_io {
+  explicit asio_io(starter_t = {});
+
   static void rebind_context(any_connection_t& con, any_io_context_ref other);
 };
 
