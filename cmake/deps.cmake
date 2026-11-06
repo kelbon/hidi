@@ -41,14 +41,14 @@ endif()
 CPMAddPackage(
   NAME KELCORO
   GIT_REPOSITORY https://github.com/kelbon/kelcoro
-  GIT_TAG v1.4.7
+  GIT_TAG v1.4.8
   OPTIONS "KELCORO_ENABLE_TESTING OFF"
 )
 
 CPMAddPackage(
   NAME ANYANY
   GIT_REPOSITORY https://github.com/kelbon/AnyAny
-  GIT_TAG v1.3.0
+  GIT_TAG v1.3.1
   OPTIONS "AA_ENABLE_TESTING OFF"
 )
 
@@ -67,7 +67,7 @@ unset(BOOST_INCLUDE_LIBRARIES)
 CPMAddPackage(
   NAME HPACK
   GITHUB_REPOSITORY kelbon/HPACK
-  GIT_TAG         v1.2.0
+  GIT_TAG        v1.2.1
   OPTIONS "HPACK_ENABLE_TESTING OFF"
           "HPACK_USE_CPM OFF"
 )
@@ -98,7 +98,7 @@ if (HIDI_ENABLE_TESTING)
   CPMAddPackage(
     NAME MOKO3
     GITHUB_REPOSITORY kelbon/moko3
-    GIT_TAG v0.10.2
+    GIT_TAG v0.10.3
   )
 endif()
 
