@@ -359,6 +359,12 @@ void h2server::set_accept_callback(move_only_fn<void(any_connection_t)> cb) {
   m_impl->acceptcb = std::move(cb);
 }
 
+void h2server::serve(any_connection_t con) {
+  if (m_impl->sessionsgate.is_closed()) [[unlikely]]
+    return;
+  m_impl->session_lifecycle(m_impl->sessionsgate.hold(), std::move(con)).start_and_detach();
+}
+
 size_t h2server::sessions_count() const noexcept {
   return m_impl->sessions.size();
 }
@@ -416,10 +422,7 @@ void h2server_mt::initialize() {
     [](std::unique_ptr<h2server>& server, any_connection_t sock) -> dd::job {
       dd::schedule_status e = co_await dd::jump_on(server->ioctx());
       assert(!!e);
-      if (server->m_impl->sessionsgate.is_closed()) [[unlikely]]
-        co_return;
-      server->m_impl->session_lifecycle(server->m_impl->sessionsgate.hold(), std::move(sock))
-          .start_and_detach();
+      server->serve(std::move(sock));
     }(server, std::move(sock));
   };
 

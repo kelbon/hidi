@@ -26,8 +26,6 @@ struct h2server {
   std::unique_ptr<impl> m_impl;
 
   friend struct h2server_mt;
-  // used by hidi::h2server_mt
-  void set_accept_callback(move_only_fn<void(any_connection_t)>);
 
  public:
   // `ssl` == nullptr - без TLS. TLS сервер: h2server(make_ssl_context_for_server(cert, key))
@@ -74,6 +72,16 @@ struct h2server {
   virtual dd::task<http_response> handle_request(http_request, request_context) = 0;
 
   [[nodiscard]] size_t sessions_count() const noexcept;
+
+  // принятые этим сервером соединения передаются в `cb` вместо обработки этим сервером, например
+  // чтобы раздать их другим серверам (serve)
+  void set_accept_callback(move_only_fn<void(any_connection_t)> cb);
+
+  // обрабатывать соединение как принятое этим сервером. Если сервер сейчас останавливается - соединение
+  // закрывается
+  // precondition: вызывается на потоке контекста сервера, соединение привязано к этому контексту
+  // (rebind_context)
+  void serve(any_connection_t);
 
   // returns binded address (useful e.g. if port 0 was used and OS setted real port number)
   internet_address listen(server_endpoint);
