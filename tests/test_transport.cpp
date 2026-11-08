@@ -6,6 +6,9 @@
 
 #include <moko3/moko3.hpp>
 
+#include <thread>
+#include <vector>
+
 using namespace hidi;
 
 // пишет пока не получит ошибку. Пир не читает, поэтому рано или поздно буферы ОС заполнятся и запись встанет
@@ -353,6 +356,31 @@ TEST("timer re-arm ignores canceled wait") {
     REQUIRE(canceled == 1);
     REQUIRE(fired == 0);
   }
+}
+
+// время b вышло, его обработчик уже в очереди io_context, и до него в той же итерации b.cancel(): отменить
+// уже нельзя - cancel() возвращает false, колбек приходит с canceled == false, периодический больше не тикает
+TEST("timer cancel after expiry, before the callback") {
+  boost::asio::io_context io;
+  asio_timer a(io);
+  asio_timer b(io);
+  bool b_cancel = true;
+  std::vector<bool> b_calls;
+  a.set_callback([&](bool) { b_cancel = b.cancel(); });
+  b.set_callback([&](bool canceled) { b_calls.push_back(canceled); });
+  auto tp = std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
+  a.arm(tp);
+  SECTION("one-shot") {
+    b.arm(tp + std::chrono::microseconds(1));
+  }
+  SECTION("periodic") {
+    b.arm_periodic(std::chrono::milliseconds(5));
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));  // оба истекли до первого опроса, b после a
+  io.run();           // периодический не перевзведён, иначе run не вернётся
+  REQUIRE(b_cancel);  // asio_timer гарантирует что cancel срабатывает пока задача реально не вызвана
+  REQUIRE((b_calls == std::vector<bool>{true}));
+  REQUIRE(!b.is_armed());
 }
 
 // h2server_mt принимает соединение в одном потоке и переносит его в io_context другого (rebind_context).

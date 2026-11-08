@@ -45,8 +45,7 @@ struct asio_timer {
 
   [[nodiscard]] bool is_armed() const noexcept;
 
-  // returns 'true' if timer was armed before 'cancel'
-  // do not touches setted callback
+  // see any_timer cancel
   bool cancel() noexcept;
 
   void set_callback(timer_callback_t);

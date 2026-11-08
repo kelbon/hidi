@@ -16,8 +16,10 @@ anyany_method2_n(arm_m, arm, (&self, deadline_t d) requires(self.arm(d))->void);
 // period counts from the previous tick, not from the end of the callback
 // if timer was armed, its canceled first
 anyany_method2_n(arm_periodic_m, arm_periodic, (&self, duration_t d) requires(self.arm_periodic(d))->void);
-// returns 'true' if timer was armed before 'cancel'
-// do not touches setted callback
+// if returns 'true' callback will be invoked with canceled = true
+// if returns `false` nothing to cancel
+// does not touch setted callback
+// Note: always executes callback setted in moment of invoking, so cancel() + set_callback({}) = no invoking
 anyany_method2_n(cancel_m, cancel, (&self) requires(self.cancel())->bool);
 
 anyany_method2_n(is_armed_m, is_armed, (const& self) requires(self.is_armed())->bool);

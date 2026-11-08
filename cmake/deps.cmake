@@ -48,7 +48,7 @@ CPMAddPackage(
 CPMAddPackage(
   NAME ANYANY
   GIT_REPOSITORY https://github.com/kelbon/AnyAny
-  GIT_TAG v1.3.1
+  GIT_TAG v1.4.0
   OPTIONS "AA_ENABLE_TESTING OFF"
 )
 
@@ -98,7 +98,7 @@ if (HIDI_ENABLE_TESTING)
   CPMAddPackage(
     NAME MOKO3
     GITHUB_REPOSITORY kelbon/moko3
-    GIT_TAG v0.10.3
+    GIT_TAG v0.10.4
   )
 endif()
 

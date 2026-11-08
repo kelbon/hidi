@@ -3,6 +3,7 @@
 #include "hidi/errors.hpp"
 
 #include <boost/asio/steady_timer.hpp>
+#include <boost/asio/post.hpp>
 
 namespace hidi {
 
@@ -86,7 +87,15 @@ bool asio_timer::cancel() noexcept {
     return false;
   m_impl->period = std::nullopt;
   m_impl->armed = false;
-  m_impl->timer.cancel();
+  if (m_impl->timer.cancel() == 0) {
+    // время уже вышло, обработчик ждёт в очереди с успехом: asio его не отменит. Он отбрасывается по
+    // generation, а об отмене сообщает эта задача
+    ++m_impl->generation;
+    boost::asio::post(m_impl->timer.get_executor(), [w = std::weak_ptr(m_impl)] {
+      if (auto x = w.lock())
+        x->invoke(/*canceled=*/true);
+    });
+  }
   return true;
 }
 

@@ -181,7 +181,7 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
 
     start_reader_for(self, new_connection);
     // writer itself sets writer handle in connection
-    auto onnetworkerr = [self] { self->drop_connection(reqerr_e::NETWORK_ERR); };
+    auto onnetworkerr = [self]() noexcept { self->drop_connection(reqerr_e::NETWORK_ERR); };
     start_writer_for_client(new_connection, std::move(onnetworkerr), self->get_options().force_disable_hpack,
                             {});
 
@@ -709,7 +709,7 @@ dd::task<int> h2client::send_connect_request(
   };
   node->makebody = std::move(makechan);
 
-  auto neterrcb = [] { /*noop*/ };
+  auto neterrcb = []() noexcept { /*noop*/ };
 
   co_await dd::suspend_and_t([&](dd::task<int>::handle_type me) {
     node->task = me;

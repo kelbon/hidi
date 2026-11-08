@@ -187,7 +187,7 @@ struct h2server::impl {
       HTTP2_LOG_TRACE(session_ptr->logctx(), "{} drops connection due client inactivity", nm);
       session_ptr->request_terminate();
     };
-    auto request_terminate = [session_ptr] {
+    auto request_terminate = [session_ptr]() noexcept {
       HTTP2_LOG_TRACE(session_ptr->logctx(), "writer drops connection");
       session_ptr->request_terminate();
     };
