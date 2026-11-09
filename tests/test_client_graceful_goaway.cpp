@@ -178,5 +178,79 @@ CLIENT_TEST("graceful_stop waits queued requests") {
   }
 }
 
+// после graceful_stop запросы отменяются и клиент не соединяется, пока не restart
+CLIENT_TEST("after graceful_stop requests are cancelled until restart") {
+  any_acceptor acceptor = ioctx.create_acceptor(localhost(), /*reuse_address=*/false);
+  acceptor.listen();
+  client.set_remote(acceptor.get_local_endpoint());
+  http_request req;
+  req.method = http_method_e::GET;
+  req.path = "/";
+  req.scheme = scheme_e::HTTP;
+  req.authority = client.get_remote().to_string();
+
+  co_await client.graceful_stop();
+  int status = co_await client.send_request(nullptr, nullptr, req, deadline_after(5s));
+  REQUIRE(status == reqerr_e::CANCELLED);
+  REQUIRE(!client.connected() && !client.connecting());
+  REQUIRE(!co_await client.try_connect(deadline_after(5s)));
+
+  client.restart();
+  auto connect = client.try_connect(deadline_after(5s)).start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    connect.destroy();
+  };
+  io_error_code ec;
+  any_connection_t tcp = co_await acceptor.accept(ec);
+  REQUIRE(!ec);
+  co_await tcp->handshake(ec, /*is_client=*/false);
+  REQUIRE(!ec);
+  test_h2connection server(new h2connection(std::move(tcp), *&ioctx), /*client=*/false);
+  co_await emulate_server_connection(server);
+  co_await wait_until([&] { return connect.done(); }, ioctx);
+  REQUIRE(connect.promise().result_or_rethrow());
+  co_await client.graceful_stop();
+}
+
+// одновременный graceful_stop не останавливает второй раз, а ждёт идущую остановку
+CLIENT_TEST("concurrent graceful_stop waits for the running one") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+  http_request req;
+  req.method = http_method_e::GET;
+  req.path = "/";
+  req.scheme = scheme_e::HTTP;
+  req.authority = client.get_remote().to_string();
+
+  // запрос держит первую остановку
+  auto request = client.send_request(std::move(req), deadline_after(10s)).start_and_detach(true);
+  on_scope_exit {
+    request.destroy();
+  };
+  REQUIRE((co_await server.receive_req()).streamid == 1);
+  auto first = client.graceful_stop().start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    first.destroy();
+  };
+  bool second_done = false;
+  bool first_done_before = false;
+  auto second = [](h2client& c, bool& done, bool& first_done_before, auto& first) -> dd::task<void> {
+    co_await c.graceful_stop();
+    first_done_before = first.done();
+    done = true;
+  }(client, second_done, first_done_before, first);
+  auto second_handle = second.start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    second_handle.destroy();
+  };
+  co_await yield_on_ioctx(*&ioctx);
+  REQUIRE(!first.done() && !second_done);
+
+  std::vector<header> ok{{":status", "200"}};
+  co_await server.send_rsp(1, ok);
+  co_await wait_until([&] { return second_done; }, ioctx);
+  REQUIRE(first_done_before);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

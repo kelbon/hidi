@@ -723,6 +723,16 @@ dd::task<int> h2client::send_connect_request(
 }
 
 dd::task<void> h2client::graceful_stop() {
+  if (m_stopping.closed()) {
+    (void)co_await m_stopping.wait_open();
+    co_return;
+  }
+  if (m_stopped)  // noop until restart
+    co_return;
+  m_stopping.close();
+  on_scope_exit {
+    m_stopping.open(m_ioctx);
+  };
   HTTP2_LOG_TRACE(logctx(), "h2client::graceful_stop started");
   on_scope_exit {
     HTTP2_LOG_TRACE(logctx(), "h2client::graceful_stop ended");
@@ -740,10 +750,7 @@ dd::task<void> h2client::graceful_stop() {
   while (m_requestsInProgress != 0)
     co_await sleep(std::chrono::milliseconds(1), ec);
   // request stop
-  ++m_stopRequested;
-  on_scope_exit {
-    --m_stopRequested;
-  };
+  m_stopped = true;
   // wait all 'connect' coroutines done
   auto closer = m_connectionGate.close();
   // m_notYetReadyConnection назначается только после создания tcp соединения,

@@ -17,6 +17,7 @@
 #include <kelcoro/job.hpp>
 #include <kelcoro/task.hpp>
 #include <kelcoro/gate.hpp>
+#include <kelcoro/road.hpp>
 
 #include <zal/zal.hpp>
 
@@ -92,7 +93,10 @@ struct h2client {
   // present when m_isConnecting > 0. Used to drop in-flight connection when
   // stopping
   h2connection_ptr m_notYetReadyConnection = nullptr;
-  size_t m_stopRequested = 0;
+  // after graceful_stop until restart
+  bool m_stopped = false;
+  // closed while graceful_stop
+  dd::road m_stopping;
   //  used to correctly wait in 'stop' while all connect calls will end
   dd::gate m_connectionGate;
 
@@ -116,7 +120,7 @@ struct h2client {
   [[nodiscard("this handle must be resumed")]] static dd::job start_connecting(h2client*, deadline_t);
 
   bool stop_requested() const noexcept {
-    return m_stopRequested > 0;
+    return m_stopped;
   }
 
   dd::task<void> sleep(duration_t, io_error_code&);
@@ -261,9 +265,16 @@ struct h2client {
     return try_connect(d);
   }
 
-  // ждёт завершения всех стримов и затем останавливается
-  // postcondition: *this в состоянии как будто только конструктора, connected() == false
+  // waits end of all streams, if closing already - wait its done
+  // postcondition: connected() == false, new requests canceled until restart()
   dd::task<void> graceful_stop();
+
+  // allows new requests / connections again after graceful_stop or noop
+  // precondition: graceful_stop not running now
+  void restart() noexcept {
+    assert(!m_stopping.closed() && "restart during graceful_stop");
+    m_stopped = false;
+  }
 
   // cancels all requests or active connections
   void cancel_all() noexcept;
