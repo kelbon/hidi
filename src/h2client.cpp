@@ -179,12 +179,6 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
     self->m_connection->max_continuation_len = self->m_options.max_continuation_len_bytes;
     self->m_connection->max_pending_reply_frames = self->m_options.max_pending_reply_frames;
 
-    start_reader_for(self, new_connection);
-    // writer itself sets writer handle in connection
-    auto onnetworkerr = [self]() noexcept { self->drop_connection(reqerr_e::NETWORK_ERR); };
-    start_writer_for_client(new_connection, std::move(onnetworkerr), self->get_options().force_disable_hpack,
-                            {});
-
     if (self->m_options.ping_interval != duration_t::max()) {
       new_connection->pingtimer.arm_periodic(self->m_options.ping_interval);
       new_connection->pingtimer.set_callback(
@@ -203,6 +197,12 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
       if (!new_connection->timers.empty())
         new_connection->timeout_warden_timer.arm(new_connection->timers.top()->deadline.tp);
     });
+
+    start_reader_for(self, new_connection);
+    // writer itself sets writer handle in connection
+    auto onnetworkerr = [self]() noexcept { self->drop_connection(reqerr_e::NETWORK_ERR); };
+    start_writer_for_client(new_connection, std::move(onnetworkerr), self->get_options().force_disable_hpack,
+                            {});
   } catch (std::exception& e) {
     HTTP2_LOG(self->logctx(), ERROR, "exception while trying to connect: {}", e.what());
     // if we created connection, but failed when starting reader / writer - drop

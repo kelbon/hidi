@@ -17,7 +17,8 @@ static void validate_first_settings_len(const frame_header& header) {
 }
 
 static void validate_first_server_frame_header(const frame_header& header, const log_context& logctx) {
-  if (header.type != frame_e::SETTINGS || header.length > FRAME_LEN_MAX) {
+  validate_first_settings_len(header);
+  if (header.type != frame_e::SETTINGS) {
     HTTP2_LOG(logctx, ERROR, "first server frame is not settings, frame: {}", header);
     throw protocol_error(errc_e::CONNECT_ERROR,
                          std::format("first server frame is not settings, frame: {}", header));
@@ -26,7 +27,6 @@ static void validate_first_server_frame_header(const frame_header& header, const
     HTTP2_LOG(logctx, ERROR, "invalid server preface SETTINGS with ACK flag");
     throw protocol_error(errc_e::CONNECT_ERROR, "invalid server preface SETTINGS with ACK flag");
   }
-  validate_first_settings_len(header);
 }
 
 // до подтверждения наших SETTINGS собеседник считает окно стрима равным значению по умолчанию (65'535),

@@ -642,7 +642,8 @@ void h2connection::ignore_frame(h2frame frame) {
       decrease_window_size(my_window_size, int32_t(frame.header.length), logctx);
       if (is_closed_stream(frame.header.streamid))
         throw stream_error(errc_e::STREAM_CLOSED, frame.header.streamid, "DATA frame sent for closed stream");
-      if (is_idle_stream(frame.header.streamid)) {
+      else {
+        assert(is_idle_stream(frame.header.streamid));
         throw protocol_error(
             errc_e::PROTOCOL_ERROR,
             std::format("DATA frame sent for idle stream, streamid {}", frame.header.streamid));
