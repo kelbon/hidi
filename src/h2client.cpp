@@ -174,10 +174,10 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
     }
     assert(new_connection);
 
-    self->m_connection->writer.handle = nullptr;
+    new_connection->writer.handle = nullptr;
     assert(self->m_options.max_continuation_len_bytes <= MAX_CONTINUATION_LEN);
-    self->m_connection->max_continuation_len = self->m_options.max_continuation_len_bytes;
-    self->m_connection->max_pending_reply_frames = self->m_options.max_pending_reply_frames;
+    new_connection->max_continuation_len = self->m_options.max_continuation_len_bytes;
+    new_connection->max_pending_reply_frames = self->m_options.max_pending_reply_frames;
 
     if (self->m_options.ping_interval != duration_t::max()) {
       new_connection->pingtimer.arm_periodic(self->m_options.ping_interval);
