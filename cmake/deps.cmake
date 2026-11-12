@@ -41,7 +41,7 @@ endif()
 CPMAddPackage(
   NAME KELCORO
   GIT_REPOSITORY https://github.com/kelbon/kelcoro
-  GIT_TAG v1.6.0
+  GIT_TAG v1.7.0
   OPTIONS "KELCORO_ENABLE_TESTING OFF"
 )
 
