@@ -84,5 +84,26 @@ INVALID_HEADER_TEST("0x7f in name, between regular headers", false, true, "bad\x
 INVALID_HEADER_TEST("0x80 in name, between regular headers", false, true, "bad\x80name", "x")
 INVALID_HEADER_TEST("0xff in name, between regular headers", false, true, "bad\xffname", "x")
 
+// content-type - тип тела запроса, где бы он ни стоял среди обычных хедеров
+// Эхо сервер отвечает типом тела первым, затем остальными хедерами
+SERVER_TEST("content-type after regular headers is the body content type") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  const header ua{"user-agent", "curl"};
+  const header ct{"content-type", "application/json"};
+  auto bytes = client.encode_headers({{":method", "GET"},
+                                      {":path", "/"},
+                                      {":scheme", "http"},
+                                      {":authority", addr.address().to_string()},
+                                      ua,
+                                      ct});
+  co_await client.send_raw_hdr(1, bytes, /*end_stream=*/true);
+  auto rsp = co_await client.receive_rsp();
+  REQUIRE(rsp.headers.size() == 3);
+  REQUIRE(rsp.headers[0] == header{":status", "200"});
+  REQUIRE(rsp.headers[1] == ct);
+  REQUIRE(rsp.headers[2] == ua);
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;

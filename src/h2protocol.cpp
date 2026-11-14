@@ -407,13 +407,6 @@ void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> byt
       if (!s.use_bytes(hval.size())) [[unlikely]]
         goto memory_limit_exceeded;
       req.authority = hval;
-    } else if (header.name == "content-type") {
-      if (contenttype_parsed)
-        throw duplicated_pseudoheader("content-type");
-      contenttype_parsed = true;
-      if (!s.use_bytes(hval.size())) [[unlikely]]
-        goto memory_limit_exceeded;
-      req.body.content_type = hval;
     } else if (header.name == ":protocol") {  // RFC 8441: Extended CONNECT
       if (protocol_parsed)
         throw duplicated_pseudoheader(":protocol");
@@ -433,6 +426,15 @@ void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> byt
     if (std::optional<std::string> err = validate_header_name(header.name.str(), header.value.str())) {
       hpack::ignore_headers_block(d, in, e);
       throw stream_error(errc_e::PROTOCOL_ERROR, s.streamid, std::move(*err));
+    }
+    if (header.name == "content-type") {
+      if (contenttype_parsed)
+        throw duplicated_pseudoheader("content-type");
+      contenttype_parsed = true;
+      if (!s.use_bytes(header.value.str().size())) [[unlikely]]
+        goto memory_limit_exceeded;
+      req.body.content_type = header.value.str();
+      continue;
     }
     if (!s.use_bytes(header.name.str(), header.value.str())) [[unlikely]]
       goto memory_limit_exceeded;
