@@ -70,9 +70,7 @@ struct asio_connection {
   dd::task<void> handshake(io_error_code&, bool) {
     co_return;
   }
-  bool is_https() const {
-    return false;
-  }
+  static constexpr bool is_https = false;
   void rebind(void*, rebind_result&);
 };
 
@@ -159,9 +157,7 @@ struct asio_tls_connection {
   void start_write(writer_node*);
   dd::task<void> shutdown() noexcept;
   dd::task<void> handshake(io_error_code& ec, bool is_client);
-  bool is_https() const {
-    return true;
-  }
+  static constexpr bool is_https = true;
   void rebind(void*, rebind_result&);
 };
 

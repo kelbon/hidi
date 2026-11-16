@@ -127,9 +127,7 @@ struct buffered_connection {
   dd::task<void> handshake(io_error_code& ec, bool is_client) {
     return inner.handshake(ec, is_client);
   }
-  bool is_https() const {
-    return inner.is_https();
-  }
+  static constexpr bool is_https = Inner::is_https;
 
   [[nodiscard]] bool has_work() const noexcept {
     return !outbuf.empty() || !waiters.empty();

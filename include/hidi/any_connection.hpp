@@ -51,10 +51,8 @@ anyany_method2_n(shutdown_m, shutdown, (&self) requires(self.shutdown())->dd::ta
 anyany_method2_n(
     handshake_m, handshake,
     (&self, io_error_code& ec, bool is_client) requires(self.handshake(ec, is_client))->dd::task<void>);
-// TODO // static constexpr bool is_https в типе соединения
-// TODO anyany_pseudomethod(is_https_m, requires(Self::is_https)->bool);
-// TODO заменить на псевдометод
-anyany_method2_n(is_https_m, is_https, (const& self) requires(self.is_https())->bool);
+// static constexpr bool is_https в типе соединения
+anyany_pseudomethod(is_https_m, requires(Self::is_https)->bool);
 
 struct rebind_result;
 
