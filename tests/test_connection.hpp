@@ -56,6 +56,7 @@ struct header {
   std::string name;
   std::string value;
   bool indexed = true;
+  bool huffman = false;
 
   bool operator==(const header& h) const noexcept {
     return name == h.name && value == h.value;
