@@ -23,9 +23,9 @@ SERVER_TEST("server bytes limit") {
         {":authority", addr.address().to_string()},
     };
     size_t sum = 0;
-    for (auto& [n, v, x] : hdrs) {
+    for (auto& h : hdrs) {
       // name.size() not counted internally as used bytes (only for pseudoheader)
-      sum += v.size();
+      sum += h.value.size();
     }
     auto hdrs_bytes = client.encode_headers(hdrs);
 
@@ -253,6 +253,71 @@ SERVER_TEST("big requests") {
   std::unordered_map rsps = co_await client.receive_streams(COUNT, deadline_after(25s));
   for (auto& [streamid, rsp] : rsps)
     REQUIRE(std::hash<std::string_view>{}(rsp.body_strview()) == expected_hashs[streamid]);
+}
+
+TEST("big hpack decode buffers are released") {
+  // строки декодируются Huffman, тогда header_view владеет памятью
+  auto decode = [](hpack::header_view& h, std::string_view name, std::string_view value) {
+    hpack::encoder enc;
+    hpack::decoder dec;
+    std::vector<byte_t> bytes;
+    enc.encode_header_without_indexing<true>(name, value, std::back_inserter(bytes));
+    const byte_t* in = bytes.data();
+    dec.decode_header(in, bytes.data() + bytes.size(), h);
+    REQUIRE(h.name.str() == name && h.value.str() == value);
+  };
+  hpack::header_view h;
+  decode(h, "small-name", "small value");
+  size_t name_cap = h.name.bytes_allocated();
+  size_t value_cap = h.value.bytes_allocated();
+  REQUIRE(name_cap > 0 && value_cap > 0);
+  release_big_hpack_buffers(h);
+  // маленькие буферы остаются для переиспользования
+  REQUIRE(h.name.bytes_allocated() == name_cap && h.value.bytes_allocated() == value_cap);
+
+  // большое значение освобождается, маленькое имя остаётся
+  decode(h, "small-name", std::string(MAX_HPACK_BUFFER + 1, 'v'));
+  REQUIRE(h.value.bytes_allocated() > MAX_HPACK_BUFFER);
+  release_big_hpack_buffers(h);
+  REQUIRE(h.value.bytes_allocated() == 0);
+  REQUIRE(h.name.bytes_allocated() == name_cap);
+
+  // большое имя освобождается так же
+  decode(h, std::string(MAX_HPACK_BUFFER + 1, 'n'), "v");
+  release_big_hpack_buffers(h);
+  REQUIRE(h.name.bytes_allocated() == 0);
+}
+
+// огромные Huffman заголовки (буферы декодирования соединения больше MAX_HPACK_BUFFER и
+// освобождаются после блока) не ломают соседние запросы на том же соединении
+SERVER_TEST("big huffman headers between small ones") {
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+  fuzzing::fuzzer fuz;
+  stream_id_t id = 1;
+  for (int i = 0; i < 20; ++i) {
+    // чередование больших и маленьких, иногда большие подряд
+    size_t len = i % 3 == 2 ? fuz.rint(1, 100) : fuz.rint(MAX_HPACK_BUFFER, 3 * MAX_HPACK_BUFFER);
+    std::string value(len, '\0');
+    for (char& c : value)
+      c = char(fuz.rint(int('a'), int('z')));
+    std::vector<header> hdrs{
+        {":method", "GET", true, true},
+        {":path", "/", true, true},
+        {":scheme", "http", true, true},
+        {":authority", addr.address().to_string(), true, true},
+        // без индексации: значение каждый раз декодируется заново
+        {"x-big", value, /*indexed=*/false, /*huffman=*/true},
+        {"x-small", std::format("{}", i), /*indexed=*/false, /*huffman=*/true},
+    };
+    auto bytes = client.encode_headers(hdrs);
+    co_await client.send_raw_hdr(id, bytes, /*end_stream=*/true, /*split=*/true);
+    auto rsp = co_await client.receive_rsp();
+    REQUIRE(rsp.streamid == id);
+    REQUIRE(rsp.find_hdr("x-big") == value);
+    REQUIRE(rsp.find_hdr("x-small") == std::format("{}", i));
+    id += 2;
+  }
 }
 
 REGISTER_TEST_LISTENER(moko3::gtest_listener);

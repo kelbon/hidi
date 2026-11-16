@@ -438,11 +438,17 @@ dd::task<void> test_h2connection::send_raw_continuation(stream_id_t streamid, st
 
 std::vector<byte_t> test_h2connection::encode_headers(std::vector<header> hdrs) {
   std::vector<byte_t> bytes;
-  for (auto& h : hdrs)
-    if (h.indexed)
-      con->encoder.encode</*Cache=*/true>(h.name, h.value, std::back_inserter(bytes));
+  for (auto& h : hdrs) {
+    auto out = std::back_inserter(bytes);
+    if (h.indexed && h.huffman)
+      con->encoder.encode</*Cache=*/true, /*Huffman=*/true>(h.name, h.value, out);
+    else if (h.indexed)
+      con->encoder.encode</*Cache=*/true>(h.name, h.value, out);
+    else if (h.huffman)
+      con->encoder.encode_header_without_indexing</*Huffman=*/true>(h.name, h.value, out);
     else
-      con->encoder.encode_header_without_indexing(h.name, h.value, std::back_inserter(bytes));
+      con->encoder.encode_header_without_indexing(h.name, h.value, out);
+  }
   return bytes;
 }
 

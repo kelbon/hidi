@@ -234,6 +234,15 @@ struct h2stream {
   const log_context& logctx() const noexcept;
 };
 
+constexpr inline size_t MAX_HPACK_BUFFER = 4 * 1024;
+
+inline void release_big_hpack_buffers(hpack::header_view& h) noexcept {
+  if (h.name.bytes_allocated() > MAX_HPACK_BUFFER) [[unlikely]]
+    h.name.reset();
+  if (h.value.bytes_allocated() > MAX_HPACK_BUFFER) [[unlikely]]
+    h.value.reset();
+}
+
 // Note: shutdown must be called
 struct h2connection {
   using requests_member_hook_t =
@@ -271,6 +280,8 @@ struct h2connection {
   // правила для первого фрейма SETTINGS отличаются от правил для последующих
   bool first_settings_frame_received = false;
   hpack::decoder decoder;
+  // переиспользуется при декоде
+  hpack::header_view decoded_header;
   // odd, for client its last started stream, for server last stream started by client
   stream_id_t laststartedstreamid = 0;
   uint32_t refcount = 0;

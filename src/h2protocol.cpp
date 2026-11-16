@@ -7,6 +7,7 @@
 
 #include <hpack/hpack.hpp>
 #include <strswitch/strswitch.hpp>
+#include <zal/zal.hpp>
 
 namespace hidi {
 
@@ -353,7 +354,10 @@ std::optional<std::string> validate_header_name(std::string_view str, std::strin
 void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> bytes) {
   const auto* in = bytes.data();
   const auto* e = in + bytes.size();
-  hpack::header_view header;
+  hpack::header_view& header = s.connection->decoded_header;
+  on_scope_exit {
+    release_big_hpack_buffers(header);
+  };
 
   // parse required pseudoheaders
   http_request& req = s.req;
