@@ -288,9 +288,11 @@ static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, ht
 
 static streaming_body_t body_in_chunks(http_body_bytes body) {
   constexpr size_t CHUNK = 64 * 1024;
-  for (size_t off = 0; off < body.size(); off += CHUNK)
-    co_yield chunk(std::span(body).subspan(off, std::min(CHUNK, body.size() - off)),
-                   /*stable=*/true);
+  for (size_t off = 0; off < body.size(); off += CHUNK) {
+    size_t len = std::min(CHUNK, body.size() - off);
+    co_yield chunk(std::span(body).subspan(off, len), /*stable=*/true,
+                   /*end_stream=*/off + len == body.size());
+  }
 }
 
 template <bool IS_CLIENT>
@@ -321,6 +323,8 @@ dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callback
     snode.req.body = {};
     snode.makebody.reset();
   };
+  bool end_stream_sent = false;
+
   // if !IS_CLIENT request finished on each code path
   // create 'b' before loop to handle exception after loop
   HTTP2_ASSUME_THREAD_UNCHANGED_START;
@@ -330,24 +334,27 @@ dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callback
     chunk&& part = *b;
     if (snode.finished() || con->is_dropped())
       co_return;
+    // после куска с end_stream канал должен завершиться
+    assert(!end_stream_sent);
     if (part.data.empty())
       continue;
-    HTTP2_LOG_TRACE(con->logctx, "sendind DATA part for stream {}, len: {}, stable: {}", snode.streamid,
-                    part.data.size(), part.stable);
+    HTTP2_LOG_TRACE(con->logctx, "sendind DATA part for stream {}, len: {}, stable: {}, end_stream: {}",
+                    snode.streamid, part.data.size(), part.stable, part.end_stream);
     if (part.stable && aa::invoke<is_buffered_m>(con->tcpcon)) {
       co_await write_data</*Inplace=*/false>(snode, *con, part.data.data(),
                                              part.data.data() + part.data.size(),
-                                             /*allow_end_stream=*/false, ec);
+                                             /*allow_end_stream=*/part.end_stream, ec);
     } else {
       http_body_bytes& data = snode.req.body.data;
       data.resize(part.data.size(), uninitialized_byte);
       memcpy(data.data(), part.data.data(), part.data.size());
       co_await write_data</*Inplace=*/true>(snode, *con, data.data(), data.data() + data.size(),
-                                            /*allow_end_stream=*/false, ec);
+                                            /*allow_end_stream=*/part.end_stream, ec);
     }
 
     if (ec)
       goto end;
+    end_stream_sent = part.end_stream;
   }
 
   if (std::exception_ptr e = chan.take_exception()) {
@@ -360,7 +367,9 @@ dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callback
   if (snode.finished() || con->is_dropped())
     co_return;
 
-  if (!trailers.empty()) {
+  if (end_stream_sent) {
+    // стрим завершён последним DATA
+  } else if (!trailers.empty()) {
     co_await write_trailers(*con, node->streamid, std::move(trailers), ec);
 
     if (snode.finished() || con->is_dropped())

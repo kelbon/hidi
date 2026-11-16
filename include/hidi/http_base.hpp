@@ -136,13 +136,19 @@ struct chunk {
   std::span<const byte_t> data;
   // true если данные не удаляться пока их пишут
   bool stable = false;
+  // маркер что это последнее что нужно отправить в стриме (трейлеры игнорируются)
+  // после чанка с таким маркером канал обязан завершиться
+  // пустой кусок с end_stream - то же, что просто конец канала
+  bool end_stream = false;
 
   template <noexport::bytes_range R>
-  chunk(R&& r, bool stable = false) noexcept
-      : data((const byte_t*)std::ranges::data(r), std::ranges::size(r)), stable(stable) {
+  chunk(R&& r, bool stable = false, bool end_stream = false) noexcept
+      : data((const byte_t*)std::ranges::data(r), std::ranges::size(r)),
+        stable(stable),
+        end_stream(end_stream) {
   }
   template <size_t N>
-  chunk(const char (&)[N], bool stable = false) = delete;
+  chunk(const char (&)[N], bool stable = false, bool end_stream = false) = delete;
 };
 
 using streaming_body_t = dd::channel<chunk>;
