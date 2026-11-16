@@ -60,7 +60,7 @@ static streaming_body_t do_request(http_response rsp, memory_queue_ptr q, reques
   std::string data = "hello world data word big liloaf";
 
   for (char& c : data)
-    co_yield {(byte_t*)&c, 1};
+    co_yield std::string_view(&c, 1);
   std::string received;
   while (data != received) {
     auto c = co_await q->next_chunk();

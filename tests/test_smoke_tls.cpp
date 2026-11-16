@@ -107,7 +107,7 @@ void check_streaming_response(const hidi::http_response& rsp) {
 
 hidi::streaming_body_t makebody(hidi::http_headers_t& trailers) {
   for (const char& c : EXPECTED_DATA)
-    co_yield {(const hidi::byte_t*)&c, 1};
+    co_yield std::string_view(&c, 1);
   trailers = EXPECTED_HEADERS;
 }
 
@@ -129,7 +129,7 @@ streaming_body_t websocket_connect_test(http_response rsp, memory_queue_ptr q, r
   std::string data = "hello world!";
 
   for (size_t i = 0; i < data.size(); ++i) {
-    co_yield {(byte_t*)&data[i], 1};
+    co_yield std::string_view(&data[i], 1);
     auto s = co_await q->next_chunk();
     error_if(s.size() != 1);
     error_if(s.front() != data[i]);

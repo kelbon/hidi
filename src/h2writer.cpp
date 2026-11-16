@@ -286,12 +286,11 @@ static dd::task<void> write_trailers(h2connection& con, stream_id_t streamid, ht
     co_await write_continuations(&con, streamid, fhdr.length + H2FHL, std::move(bytes), ec);
 }
 
-// write_stream_data копирует каждый кусок в req.body.data, поэтому тело отдаётся кусками:
-// иначе на время отправки оно лежало бы в памяти дважды
 static streaming_body_t body_in_chunks(http_body_bytes body) {
   constexpr size_t CHUNK = 64 * 1024;
   for (size_t off = 0; off < body.size(); off += CHUNK)
-    co_yield std::span<const byte_t>(body).subspan(off, std::min(CHUNK, body.size() - off));
+    co_yield chunk(std::span(body).subspan(off, std::min(CHUNK, body.size() - off)),
+                   /*stable=*/true);
 }
 
 template <bool IS_CLIENT>
@@ -328,18 +327,24 @@ dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callback
   auto b = co_await chan.begin();
   for (; b != chan.end(); (void)(co_await (++b))) {
     HTTP2_ASSUME_THREAD_UNCHANGED_END;
-    std::span<const byte_t> chunk = *b;
+    chunk&& part = *b;
     if (snode.finished() || con->is_dropped())
       co_return;
-    if (chunk.empty())
+    if (part.data.empty())
       continue;
-    http_body_bytes& data = snode.req.body.data;
-    data.resize(chunk.size(), uninitialized_byte);
-    memcpy(data.data(), chunk.data(), chunk.size());
-    HTTP2_LOG_TRACE(con->logctx, "sendind DATA part for stream {}, len: {}, bodystr: \"{}\"", snode.streamid,
-                    data.size(), snode.req.body.strview());
-    co_await write_data</*Inplace=*/true>(snode, *con, data.data(), data.data() + data.size(),
-                                          /*allow_end_stream=*/false, ec);
+    HTTP2_LOG_TRACE(con->logctx, "sendind DATA part for stream {}, len: {}, stable: {}", snode.streamid,
+                    part.data.size(), part.stable);
+    if (part.stable && aa::invoke<is_buffered_m>(con->tcpcon)) {
+      co_await write_data</*Inplace=*/false>(snode, *con, part.data.data(),
+                                             part.data.data() + part.data.size(),
+                                             /*allow_end_stream=*/false, ec);
+    } else {
+      http_body_bytes& data = snode.req.body.data;
+      data.resize(part.data.size(), uninitialized_byte);
+      memcpy(data.data(), part.data.data(), part.data.size());
+      co_await write_data</*Inplace=*/true>(snode, *con, data.data(), data.data() + data.size(),
+                                            /*allow_end_stream=*/false, ec);
+    }
 
     if (ec)
       goto end;

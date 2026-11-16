@@ -191,7 +191,7 @@ struct h2client {
     stream_body_maker_t streambody = [body = std::move(request.body), t = std::move(trailers)](
                                          http_headers_t& trails,
                                          request_context) mutable -> streaming_body_t {
-      co_yield std::span(body.data);
+      co_yield chunk(body.data, /*stable=*/true);
       trails = std::move(t);
     };
     return send_streaming_request(std::move(request), std::move(streambody), deadline);
