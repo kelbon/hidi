@@ -26,7 +26,7 @@ CLIENT_TEST("client does not open new streams after graceful GOAWAY") {
   io_error_code ec;
   any_connection_t tcp1 = co_await acceptor.accept(ec);
   REQUIRE(!ec);
-  co_await tcp1->handshake(ec, /*is_client=*/false);
+  co_await tcp1.handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
   test_h2connection server(new h2connection(std::move(tcp1), *&ioctx), /*client=*/false);
   co_await emulate_server_connection(server);
@@ -68,7 +68,7 @@ CLIENT_TEST("client does not open new streams after graceful GOAWAY") {
   // старое соединение завершилось, B должен прийти в новом
   any_connection_t tcp2 = co_await acceptor.accept(ec);
   REQUIRE(!ec);
-  co_await tcp2->handshake(ec, /*is_client=*/false);
+  co_await tcp2.handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
   test_h2connection server2(new h2connection(std::move(tcp2), *&ioctx), /*client=*/false);
   // запрос B может прийти раньше SETTINGS ACK / WINDOW_UPDATE, порядок этих кадров не важен
@@ -203,7 +203,7 @@ CLIENT_TEST("after graceful_stop requests are cancelled until restart") {
   io_error_code ec;
   any_connection_t tcp = co_await acceptor.accept(ec);
   REQUIRE(!ec);
-  co_await tcp->handshake(ec, /*is_client=*/false);
+  co_await tcp.handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
   test_h2connection server(new h2connection(std::move(tcp), *&ioctx), /*client=*/false);
   co_await emulate_server_connection(server);

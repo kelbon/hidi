@@ -47,28 +47,18 @@ void apply_tcp_options(boost::asio::basic_socket<boost::asio::ip::tcp, E>& tcp_s
 
 namespace hidi {
 
-// переносит соединение на другой контекст (h2server_mt). TLS или нет - по самому соединению
-static void do_rebind_context(any_connection_t& con, asio::io_context& ioctx, any_io_context_ref other) {
-  connection_i* inner = rebind_buffered(con, other).get();
-  if (auto* tls = dynamic_cast<asio_tls_connection*>(inner)) {
-    noexport::rebind_tls_executor(*tls, ioctx);
-  } else {
-    auto* tcp = dynamic_cast<asio_connection*>(inner);
-    assert(tcp);
-    noexport::rebind_tcp_executor(*tcp, ioctx);
-  }
-}
-
 // см. tcp_connection_options::buffer_writes
 static any_connection_t make_tcp_connection(asio::ip::tcp::socket sock, const tcp_connection_options& opts,
                                             any_io_context_ref io) {
-  return maybe_buffered(any_connection_t(new asio_connection(std::move(sock))), opts.buffer_writes, io);
+  return maybe_buffered(any_connection_t(std::in_place_type<asio_connection>, std::move(sock)),
+                        opts.buffer_writes, io);
 }
 
 static any_connection_t make_tls_connection(asio::ip::tcp::socket sock, ssl_context_ptr ctx,
                                             const tcp_connection_options& opts, any_io_context_ref io) {
-  return maybe_buffered(any_connection_t(new asio_tls_connection(std::move(sock), std::move(ctx))),
-                        opts.buffer_writes, io);
+  return maybe_buffered(
+      any_connection_t(std::in_place_type<asio_tls_connection>, std::move(sock), std::move(ctx)),
+      opts.buffer_writes, io);
 }
 
 // Гарантирует:
@@ -196,6 +186,12 @@ dd::task<void> asio_tls_connection::handshake(io_error_code& ec, bool is_client)
                          ec);
 }
 
+void asio_tls_connection::rebind(void* p, rebind_result& r) {
+  auto* ctx = reinterpret_cast<asio_ref_io*>(p);
+  noexport::rebind_tls_executor(*this, ctx->ioctx);
+  r.ptr = ctx;
+}
+
 asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
   sock.non_blocking(true);
   (void)start_inner_writer_for(this);
@@ -221,6 +217,12 @@ dd::task<void> asio_connection::shutdown() noexcept {
   return do_shutdown(writedata, sock);
 }
 
+void asio_connection::rebind(void* p, rebind_result& r) {
+  auto* ctx = reinterpret_cast<asio_ref_io*>(p);
+  noexport::rebind_tcp_executor(*this, ctx->ioctx);
+  r.ptr = ctx;
+}
+
 // создаёт и настраивает клиентское TLS соединение. Handshake делает вызывающий (connection_i::handshake),
 // чтобы его можно было прервать через shutdown
 static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_sock, ssl_context_ptr sslctx,
@@ -228,21 +230,22 @@ static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_soc
                                                    const remote_and_local_endpoints& ep,
                                                    any_io_context_ref io) {
   namespace ssl = asio::ssl;
-  std::unique_ptr<asio_tls_connection> res(new asio_tls_connection(std::move(tcp_sock), std::move(sslctx)));
+  any_connection_t res;
+  asio_tls_connection& c = res.emplace<asio_tls_connection>(std::move(tcp_sock), std::move(sslctx));
   if (opts.host_for_name_verification) {
-    res->sock.set_verify_mode(ssl::verify_peer);
-    res->sock.set_verify_callback(asio::ssl::host_name_verification(*opts.host_for_name_verification));
+    c.sock.set_verify_mode(ssl::verify_peer);
+    c.sock.set_verify_callback(asio::ssl::host_name_verification(*opts.host_for_name_verification));
   } else {
-    res->sock.set_verify_mode(ssl::verify_none);
+    c.sock.set_verify_mode(ssl::verify_none);
   }
   if (!opts.is_primal_connection)
-    SSL_set_mode(res->sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
+    SSL_set_mode(c.sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
   // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
   // SNI, по RFC 6066 только для доменного имени, не для IP адреса
   if (const std::string* host = ep.remote.fqdn()) {
     io_error_code ipec;
     (void)asio::ip::make_address(*host, ipec);
-    if (ipec && !SSL_set_tlsext_host_name(res->sock.native_handle(), host->c_str()))
+    if (ipec && !SSL_set_tlsext_host_name(c.sock.native_handle(), host->c_str()))
       throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
   }
   return maybe_buffered(any_connection_t(std::move(res)), opts.buffer_writes, io);
@@ -327,7 +330,7 @@ struct asio_acceptor {
 
     co_await net.accept(a, socket, ec);
     if (ec)
-      co_return nullptr;
+      co_return any_connection_t{};
     apply_tcp_options(socket, options);
     // TLS handshake делает сервер через connection_i::handshake
     if (sslctx)
@@ -361,15 +364,7 @@ any_acceptor asio_ref_io::create_acceptor(internet_address addr, bool reuse_addr
   return do_create_acceptor(*this, std::move(addr), reuse_address, std::move(opts), std::move(ssl));
 }
 
-void asio_ref_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_context(con, aa::any_cast<asio_ref_io&>(other).ioctx, other);
-}
-
 asio_io::asio_io(starter_t s) : asio_ref_io(owned, std::move(s)) {
-}
-
-void asio_io::rebind_context(any_connection_t& con, any_io_context_ref other) {
-  do_rebind_context(con, aa::any_cast<asio_io&>(other).ioctx, other);
 }
 
 }  // namespace hidi

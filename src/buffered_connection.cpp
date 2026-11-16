@@ -175,7 +175,7 @@ dd::task<void> buffered_connection::shutdown() noexcept {
     co_await drain_awaiter(this);
     (void)timer.cancel();
   }
-  co_await inner->shutdown();
+  co_await inner.shutdown();
   // после таймаута писатель ещё мог дописывать или быть запланирован: с write_ec он сразу встанет на ожидание
   co_await drain_awaiter(this);
   std::exchange(writer, nullptr).destroy();

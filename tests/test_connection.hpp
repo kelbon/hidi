@@ -290,17 +290,60 @@ struct test_io {
   // для фейкового сервера (TLS)
   server_ssl_context_ptr server_ssl = nullptr;
 
-  operator any_io_context_ref() const noexcept {
-    return io;
+  dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints e, deadline_t d,
+                                                      tcp_connection_options o, client_ssl_context_ptr c) {
+    return io.create_connection_client(std::move(e), d, std::move(o), std::move(c));
   }
-  any_timer create_timer() {
-    return io.create_timer();
+
+  any_acceptor create_acceptor(internet_address a, bool reuse_address, tcp_connection_options o,
+                               server_ssl_context_ptr c) {
+    return io.create_acceptor(std::move(a), reuse_address, std::move(o), std::move(c));
   }
+
   dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints e, deadline_t d) {
     return io.create_connection_client(std::move(e), d, tcp, client_ssl);
   }
   any_acceptor create_acceptor(internet_address addr, bool reuse_address) {
     return io.create_acceptor(std::move(addr), reuse_address, tcp, server_ssl);
+  }
+
+  bool poll_one() {
+    return io.poll_one() > 0;
+  }
+
+  size_t poll() {
+    return io.poll();
+  }
+  size_t run() {
+    return io.run();
+  }
+  void stop() {
+    return io.stop();
+  }
+  bool stopped() {
+    return io.stopped();
+  }
+  void restart() {
+    return io.restart();
+  }
+  any_timer create_timer() {
+    return io.create_timer();
+  }
+  void attach(dd::task_node* n) {
+    io.attach(n);
+  }
+  bool running_in_this_thread() {
+    return io.running_in_this_thread();
+  }
+  void start_task() {
+    io.start_task();
+  }
+  void end_task() {
+    io.end_task();
+  }
+
+  void* native() noexcept {
+    return io.native();
   }
 };
 
@@ -311,7 +354,7 @@ inline dd::task<test_h2connection> fake_client_connection(
   auto c = co_await io.create_connection_client({addr}, deadline);
   // для TLS это handshake, для TCP ничего не делает
   io_error_code ec;
-  co_await c->handshake(ec, /*is_client=*/true);
+  co_await c.handshake(ec, /*is_client=*/true);
   REQUIRE(!ec);
   co_return test_h2connection(new h2connection(std::move(c), io.io), /*client=*/true);
 }
@@ -341,7 +384,7 @@ inline dd::task<test_h2connection> fake_server_session(test_io io, server_endpoi
   any_connection_t tcpcon = co_await a.accept(ec);
   REQUIRE(!ec);
   // для TLS это handshake, для TCP ничего не делает
-  co_await tcpcon->handshake(ec, /*is_client=*/false);
+  co_await tcpcon.handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
   h2connection_ptr con = new h2connection(std::move(tcpcon), io.io);
   co_return test_h2connection(std::move(con), /*client*/ false);

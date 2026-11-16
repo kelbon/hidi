@@ -532,7 +532,7 @@ bool h2connection::prepare_to_shutdown(reqerr_e::values_e reason) noexcept {
 static dd::job do_shutdown_connection(h2connection_ptr con) {
   assert(con);
   // держит шаред, автономно не трогая ничего другого, возможно в "бекграунде" останавливается
-  co_await con->tcpcon->shutdown();
+  co_await con->tcpcon.shutdown();
 }
 
 void h2connection::shutdown(reqerr_e::values_e reason) noexcept {

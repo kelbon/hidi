@@ -203,7 +203,7 @@ struct h2server::impl {
       timer.arm(options.connection_timeout);
       {
         io_error_code ec;
-        co_await session.connection->tcpcon->handshake(ec, /*is_client=*/false);
+        co_await session.connection->tcpcon.handshake(ec, /*is_client=*/false);
         if (ec)
           throw network_exception(ec);
       }
@@ -413,7 +413,8 @@ void h2server_mt::initialize() {
     auto& server = next_server().server;
 
     try {
-      aa::invoke<rebind_context_m>(server->ioctx())(sock, *&server->ioctx());
+      rebind_result r;
+      sock.rebind(server->ioctx().native(), r);
     } catch (std::exception& e) {
       HTTP2_LOG(server->m_impl->logctx(), ERROR, "error when transfering accepted socket, err: {}", e.what());
       return;

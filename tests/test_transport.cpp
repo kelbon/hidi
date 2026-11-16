@@ -30,11 +30,11 @@ TRANSPORT_TEST("shutdown does not wait for blocked write") {
   any_connection_t peer =
       co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s), opts, nullptr);
   io_error_code ec;
-  co_await peer->handshake(ec, /*is_client=*/true);
+  co_await peer.handshake(ec, /*is_client=*/true);
   REQUIRE(!ec);
   any_connection_t con = co_await a.accept(ec);
   REQUIRE(!ec);
-  co_await con->handshake(ec, /*is_client=*/false);
+  co_await con.handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
 
   io_error_code write_ec;
@@ -42,11 +42,11 @@ TRANSPORT_TEST("shutdown does not wait for blocked write") {
   write_until_error(con, write_ec, write_done).start_and_detach();
   co_await net.sleep(rawio, std::chrono::milliseconds(100));
 
-  co_await con->shutdown();
+  co_await con.shutdown();
   // либо отменена зависшая запись, либо следующая запись после shutdown
   REQUIRE(write_done);
   REQUIRE(write_ec == boost::asio::error::operation_aborted);
-  co_await peer->shutdown();
+  co_await peer.shutdown();
 }
 
 // сервер принял TCP соединение, но не отвечает на TLS handshake. Клиент должен уважать deadline
@@ -111,7 +111,7 @@ TRANSPORT_TEST("timer callback rearms and replaces itself") {
 }
 
 static dd::job shutdown_connection(any_connection_t& con, bool& done) {
-  co_await con->shutdown();
+  co_await con.shutdown();
   done = true;
 }
 
@@ -131,7 +131,7 @@ TRANSPORT_TEST("client TLS handshake is interrupted by shutdown") {
   });
   timer.arm(std::chrono::milliseconds(100));
   io_error_code ec;
-  co_await con->handshake(ec, /*is_client=*/true);
+  co_await con.handshake(ec, /*is_client=*/true);
   REQUIRE(ec);
   co_await wait_until([&] { return shutdown_done; }, *&ioctx);
 }
@@ -231,11 +231,14 @@ static dd::task<void> accept_raw(boost::asio::ip::tcp::acceptor& a, ssl_context_
   io_error_code ec;
   co_await net.accept(a, sock, ec);
   REQUIRE(!ec);
-  if (sslctx)
-    out.reset(new asio_tls_connection(std::move(sock), std::move(sslctx)));
-  else
-    out.reset(new asio_connection(std::move(sock)));
-  co_await out->handshake(ec, /*is_client=*/false);
+  if (sslctx) {
+    out.reset();
+    out = any_connection_t(std::in_place_type<asio_tls_connection>, std::move(sock), std::move(sslctx));
+  } else {
+    out.reset();
+    out = any_connection_t(std::in_place_type<asio_connection>, std::move(sock));
+  }
+  co_await out.handshake(ec, /*is_client=*/false);
   REQUIRE(!ec);
   done = true;
 }
@@ -263,7 +266,7 @@ TRANSPORT_TEST("write under backpressure") {
       co_await ioctx.create_connection_client({a.local_endpoint()}, deadline_after(5s), opts, client_ssl);
   {
     io_error_code ec;
-    co_await writer->handshake(ec, /*is_client=*/true);
+    co_await writer.handshake(ec, /*is_client=*/true);
     REQUIRE(!ec);
   }
   while (!accepted)
@@ -282,8 +285,8 @@ TRANSPORT_TEST("write under backpressure") {
       REQUIRE(chunk[i] == pattern_byte(c * BACKPRESSURE_CHUNK + i));
   }
   REQUIRE(written);
-  co_await writer->shutdown();
-  co_await reader->shutdown();
+  co_await writer.shutdown();
+  co_await reader.shutdown();
 }
 
 static dd::task<void> accept_and_get_sni(boost::asio::ip::tcp::acceptor& a, boost::asio::ssl::context& sslctx,
@@ -322,12 +325,12 @@ TRANSPORT_TEST("client sends SNI") {
   any_connection_t con = co_await ioctx.create_connection_client({target}, deadline_after(5s), {},
                                                                  make_ssl_context_for_client({}));
   io_error_code ec;
-  co_await con->handshake(ec, /*is_client=*/true);
+  co_await con.handshake(ec, /*is_client=*/true);
   REQUIRE(!ec);
   while (!done)
     co_await net.sleep(rawio, std::chrono::milliseconds(1));
   REQUIRE(sni == expected);
-  co_await con->shutdown();
+  co_await con.shutdown();
 }
 
 // перевзвод таймера отменяет старое ожидание, но его завершение не должно влиять на новый взвод
@@ -405,20 +408,21 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
   any_connection_t con = co_await a.accept(ec);
   REQUIRE(!ec);
 
-  aa::invoke<rebind_context_m>(ioctx)(con, *&target);
+  rebind_result r;
+  con.rebind(target.native(), r);
 
   if (tls) {
-    auto* c = dynamic_cast<asio_tls_connection*>(con.get());
+    auto* c = aa::any_cast<asio_tls_connection>(&con);
     REQUIRE(c);
     REQUIRE(c->sock.lowest_layer().non_blocking());
     REQUIRE(&c->sock.get_executor().context() == &other);
   } else {
-    auto* c = dynamic_cast<asio_connection*>(con.get());
+    auto* c = aa::any_cast<asio_connection>(&con);
     REQUIRE(c);
     REQUIRE(c->sock.non_blocking());
     REQUIRE(&c->sock.get_executor().context() == &other);
   }
-  co_await peer->shutdown();
+  co_await peer.shutdown();
 }
 
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
