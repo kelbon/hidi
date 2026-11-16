@@ -61,13 +61,13 @@ anyany_method2_n(create_acceptor_m, create_acceptor,
                      ->any_acceptor);
 
 // возвращает аргумент для `rebind` соединений создаваемых этим контекстом
-anyany_method2_n(native_n, native, (&self) requires(self.native())->void*);
+anyany_method2_n(native_m, native, (&self) requires(self.native())->void*);
 
 // movable (SooS == 0)
 using any_io_context =
     aa::basic_any_with<aa::default_allocator, /*SooS=*/0, create_timer_m, attach_task_m, poll_one_m, poll_m,
                        run_m, stop_m, stopped_m, restart_m, running_in_this_thread_m,
-                       create_connection_client_m, create_acceptor_m, native_n, start_task_m, end_task_m,
+                       create_connection_client_m, create_acceptor_m, native_m, start_task_m, end_task_m,
                        aa::type_info>;
 
 using any_io_context_ref = any_io_context::ref;

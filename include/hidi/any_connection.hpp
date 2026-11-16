@@ -95,11 +95,11 @@ struct read_awaiter {
   }
 };
 
+template <typename C>
 struct write_awaiter : writer_node {
-  any_connection_t& con;
+  C& con;
 
-  write_awaiter(any_connection_t& con2, io_error_code& ec, std::span<const byte_t> buf)
-      : writer_node(buf, ec), con(con2) {
+  write_awaiter(C& con2, io_error_code& ec, std::span<const byte_t> buf) : writer_node(buf, ec), con(con2) {
   }
 
   bool await_ready() noexcept {

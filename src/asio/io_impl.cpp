@@ -50,15 +50,20 @@ namespace hidi {
 // см. tcp_connection_options::buffer_writes
 static any_connection_t make_tcp_connection(asio::ip::tcp::socket sock, const tcp_connection_options& opts,
                                             any_io_context_ref io) {
-  return maybe_buffered(any_connection_t(std::in_place_type<asio_connection>, std::move(sock)),
-                        opts.buffer_writes, io);
+  if (opts.buffer_writes)
+    return any_connection_t(std::in_place_type<buffered_connection<asio_connection>>, io, std::move(sock));
+  else
+    return any_connection_t(std::in_place_type<asio_connection>, std::move(sock));
 }
 
 static any_connection_t make_tls_connection(asio::ip::tcp::socket sock, ssl_context_ptr ctx,
                                             const tcp_connection_options& opts, any_io_context_ref io) {
-  return maybe_buffered(
-      any_connection_t(std::in_place_type<asio_tls_connection>, std::move(sock), std::move(ctx)),
-      opts.buffer_writes, io);
+  if (opts.buffer_writes) {
+    return any_connection_t(std::in_place_type<buffered_connection<asio_tls_connection>>, io, std::move(sock),
+                            std::move(ctx));
+  } else {
+    return any_connection_t(std::in_place_type<asio_tls_connection>, std::move(sock), std::move(ctx));
+  }
 }
 
 // Гарантирует:
@@ -231,7 +236,13 @@ static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_soc
                                                    any_io_context_ref io) {
   namespace ssl = asio::ssl;
   any_connection_t res;
-  asio_tls_connection& c = res.emplace<asio_tls_connection>(std::move(tcp_sock), std::move(sslctx));
+  asio_tls_connection& c = [&]() -> auto& {
+    if (opts.buffer_writes)
+      return res.emplace<buffered_connection<asio_tls_connection>>(io, std::move(tcp_sock), std::move(sslctx))
+          .inner;
+    else
+      return res.emplace<asio_tls_connection>(std::move(tcp_sock), std::move(sslctx));
+  }();
   if (opts.host_for_name_verification) {
     c.sock.set_verify_mode(ssl::verify_peer);
     c.sock.set_verify_callback(asio::ssl::host_name_verification(*opts.host_for_name_verification));
@@ -248,7 +259,7 @@ static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_soc
     if (ipec && !SSL_set_tlsext_host_name(c.sock.native_handle(), host->c_str()))
       throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
   }
-  return maybe_buffered(any_connection_t(std::move(res)), opts.buffer_writes, io);
+  return res;
 }
 
 static dd::task<any_connection_t> do_create_connection_client(auto& self, remote_and_local_endpoints ep,

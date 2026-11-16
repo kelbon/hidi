@@ -36,7 +36,6 @@ add_library(hidilib ${CMAKE_CURRENT_SOURCE_DIR}/src/http_base.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/h2client.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/request_context.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/memory_queue.cpp
-                  ${CMAKE_CURRENT_SOURCE_DIR}/src/buffered_connection.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/h2protocol.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/h2connection.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/h2connection_establishment.cpp
