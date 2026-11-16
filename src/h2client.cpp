@@ -165,7 +165,7 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
       {
         // TLS handshake после m_notYetReadyConnection: его прерывают таймер выше и graceful_stop
         io_error_code ec;
-        co_await con->tcpcon->handshake(ec, /*is_client=*/true);
+        co_await con->tcpcon.handshake(ec, /*is_client=*/true);
         if (ec)
           throw network_exception("[TCP/SSL] cannot ssl handshake: {}", ec.message());
       }
@@ -486,7 +486,7 @@ dd::task<int> h2client::send_request(on_header_fn_ptr on_header, on_data_part_fn
   if (stop_requested()) [[unlikely]]
     co_return reqerr_e::CANCELLED;
   assert(!request.path.empty());
-  request.scheme = con->tcpcon->is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
+  request.scheme = con->tcpcon.is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
   stream_id_t streamid = con->next_streamid();
   HTTP2_LOG_TRACE(con->logctx, "sending http2 request, path: {}, method: {}, streamid: {}", request.path,
                   e2str(request.method), streamid);
@@ -525,7 +525,7 @@ dd::task<int> h2client::send_request(client_request_context& ctx, on_header_fn_p
   if (stop_requested()) [[unlikely]]
     co_return reqerr_e::CANCELLED;
   assert(!request.path.empty());
-  request.scheme = con->tcpcon->is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
+  request.scheme = con->tcpcon.is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
   stream_id_t streamid = con->next_streamid();
   HTTP2_LOG_TRACE(con->logctx, "sending http2 request, path: {}, method: {}, streamid: {}", request.path,
                   e2str(request.method), streamid);
@@ -569,7 +569,7 @@ dd::task<int> h2client::send_streaming_request(on_header_fn_ptr on_header, on_da
     co_return reqerr_e::CANCELLED;
 
   assert(!request.path.empty());
-  request.scheme = con->tcpcon->is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
+  request.scheme = con->tcpcon.is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
   stream_id_t streamid = con->next_streamid();
   HTTP2_LOG_TRACE(con->logctx, "sending http2 streaming request, path: {}, method: {}, streamid: {}",
                   request.path, e2str(request.method), streamid);
@@ -663,7 +663,7 @@ dd::task<int> h2client::send_connect_request(
     co_return reqerr_e::NETWORK_ERR;
   if (stop_requested()) [[unlikely]]
     co_return reqerr_e::CANCELLED;
-  request.scheme = con->tcpcon->is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
+  request.scheme = con->tcpcon.is_https() ? scheme_e::HTTPS : scheme_e::HTTP;
   stream_id_t streamid = con->next_streamid();
   HTTP2_LOG_TRACE(con->logctx, "sending CONNECT request, streamid: {}", streamid);
 
@@ -788,7 +788,7 @@ bool h2client::connected() const {
 
 bool h2client::is_https() const noexcept {
   assert(m_connection);
-  return m_connection.get()->tcpcon->is_https();
+  return m_connection.get()->tcpcon.is_https();
 }
 
 void h2client::set_remote(endpoint s) noexcept {

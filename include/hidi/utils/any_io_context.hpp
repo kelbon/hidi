@@ -60,25 +60,22 @@ anyany_method2_n(create_acceptor_m, create_acceptor,
                   server_ssl_context_ptr ssl) requires(self.create_acceptor(addr, reuse_address, opts, ssl))
                      ->any_acceptor);
 
-struct rebind_context_m;
+// возвращает аргумент для `rebind` соединений создаваемых этим контекстом
+anyany_method2_n(native_n, native, (&self) requires(self.native())->void*);
 
 // movable (SooS == 0)
 using any_io_context =
     aa::basic_any_with<aa::default_allocator, /*SooS=*/0, create_timer_m, attach_task_m, poll_one_m, poll_m,
                        run_m, stop_m, stopped_m, restart_m, running_in_this_thread_m,
-                       create_connection_client_m, create_acceptor_m, rebind_context_m, start_task_m,
-                       end_task_m, aa::type_info>;
+                       create_connection_client_m, create_acceptor_m, native_n, start_task_m, end_task_m,
+                       aa::type_info>;
 
 using any_io_context_ref = any_io_context::ref;
 using any_io_context_ptr = any_io_context::ptr;
 
-using rebind_context_method_t = void (*)(any_connection_t&, any_io_context_ref);
-// нужно только для h2server_mt
-// static метод
-// 'con' было получено из accept/create_connection_client этого контекста
-// `other` такого же типа как и self
-// никак не трогает self, по сути "статическая" функция
-// con != nullptr
-anyany_pseudomethod(rebind_context_m, requires(&Self::rebind_context)->rebind_context_method_t);
+struct rebind_result {
+  // должен быть != nullptr и ассоциирован с переданным в rebind void*
+  any_io_context_ptr ptr;
+};
 
 }  // namespace hidi

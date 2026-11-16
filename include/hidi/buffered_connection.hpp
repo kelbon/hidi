@@ -17,13 +17,13 @@ namespace hidi {
 // Ошибка записи становится известна позже: её возвращают следующие try_write
 // shutdown сначала дописывает принятое (не дольше DRAIN_TIMEOUT), затем закрывает внутреннее соединение
 // Чтение, handshake и is_https передаются внутреннему соединению
-struct buffered_connection final : connection_i {
+struct buffered_connection final {
   // если в outbuf OUTBUF_LIMIT байт и больше, try_write ничего не принимает и запись ждёт в `waiters`
   static constexpr size_t OUTBUF_LIMIT = 64 * 1024;
   // сколько shutdown ждёт отправки принятого, если пир не читает
   static constexpr std::chrono::seconds DRAIN_TIMEOUT{1};
 
-  any_connection_t inner;
+  any_connection_t inner;  // TODO заменить на обычное соединение
   // планирует отправку в конце такта и создаёт таймер для shutdown. Меняется при rebind
   any_io_context_ref io;
 
@@ -50,22 +50,22 @@ struct buffered_connection final : connection_i {
   // соединение может быть уничтожено без shutdown (например не удался TLS handshake), писатель в этот момент
   // ждёт работы и должен быть уничтожен
   // pre: писатель не запланирован (иначе нужен shutdown перед уничтожением)
-  ~buffered_connection() override;
+  ~buffered_connection();
 
-  bool try_read(std::span<byte_t> buf) noexcept override {
-    return inner->try_read(buf);
+  bool try_read(std::span<byte_t> buf) noexcept {
+    return inner.try_read(buf);
   }
-  void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec) override {
-    inner->start_read(callback, buf, ec);
+  void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec) {
+    inner.start_read(callback, buf, ec);
   }
-  size_t try_write(std::span<const byte_t>, io_error_code&) noexcept override;
-  void start_write(writer_node*) override;
-  dd::task<void> shutdown() noexcept override;
-  dd::task<void> handshake(io_error_code& ec, bool is_client) override {
-    return inner->handshake(ec, is_client);
+  size_t try_write(std::span<const byte_t>, io_error_code&) noexcept;
+  void start_write(writer_node*);
+  dd::task<void> shutdown() noexcept;
+  dd::task<void> handshake(io_error_code& ec, bool is_client) {
+    return inner.handshake(ec, is_client);
   }
-  bool is_https() override {
-    return inner->is_https();
+  bool is_https() const {
+    return inner.is_https();
   }
 
   [[nodiscard]] bool has_work() const noexcept {
@@ -75,6 +75,12 @@ struct buffered_connection final : connection_i {
   [[nodiscard]] bool idle() const noexcept {
     return writer && !has_work();
   }
+
+  void rebind(void* ctx, rebind_result& r) {
+    inner.rebind(ctx, r);
+    io = *r.ptr;
+  }
+
   // писатель отправит накопленное в конце такта: всё, что уже готово выполниться, успеет дописать в outbuf
   void schedule_writer();
 };
@@ -83,17 +89,7 @@ struct buffered_connection final : connection_i {
 inline any_connection_t maybe_buffered(any_connection_t con, bool buffer_writes, any_io_context_ref io) {
   if (!buffer_writes)
     return con;
-  return any_connection_t(new buffered_connection(std::move(con), io));
-}
-
-// для rebind_context: перевязывает buffered_connection на `other` и возвращает соединение, которое нужно
-// перевязать реализации (внутреннее для buffered_connection, иначе само `con`)
-inline any_connection_t& rebind_buffered(any_connection_t& con, any_io_context_ref other) noexcept {
-  if (auto* b = dynamic_cast<buffered_connection*>(con.get())) {
-    b->io = std::move(other);
-    return b->inner;
-  }
-  return con;
+  return any_connection_t(std::in_place_type<buffered_connection>, std::move(con), io);
 }
 
 }  // namespace hidi

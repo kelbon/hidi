@@ -54,21 +54,26 @@ struct single_writer_guarantee {
 
 }  // namespace noexport
 
-struct asio_connection : connection_i {
+// any_connection
+struct asio_connection {
   asio::ip::tcp::socket sock;
   noexport::single_read_assumption readdata;
   noexport::single_writer_guarantee writedata;
 
   explicit asio_connection(asio::ip::tcp::socket);
 
-  bool try_read(std::span<byte_t> buf) noexcept override;
-  void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec) override;
-  size_t try_write(std::span<const byte_t>, io_error_code&) noexcept override;
-  void start_write(writer_node*) override;
-  dd::task<void> shutdown() noexcept override;
-  bool is_https() override {
+  bool try_read(std::span<byte_t> buf) noexcept;
+  void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec);
+  size_t try_write(std::span<const byte_t>, io_error_code&) noexcept;
+  void start_write(writer_node*);
+  dd::task<void> shutdown() noexcept;
+  dd::task<void> handshake(io_error_code&, bool) {
+    co_return;
+  }
+  bool is_https() const {
     return false;
   }
+  void rebind(void*, rebind_result&);
 };
 
 // контекст на asio::io_context, которым не владеет. TLS или нет и параметры TCP - аргументы
@@ -115,11 +120,14 @@ struct asio_ref_io {
     ioctx.get_executor().on_work_finished();
   }
 
+  void* native() noexcept {
+    return static_cast<void*>(this);
+  }
+
   dd::task<any_connection_t> create_connection_client(remote_and_local_endpoints, deadline_t,
                                                       tcp_connection_options, client_ssl_context_ptr);
   any_acceptor create_acceptor(internet_address, bool reuse_address, tcp_connection_options,
                                server_ssl_context_ptr);
-  static void rebind_context(any_connection_t& con, any_io_context_ref other);
 };
 
 namespace noexport {
@@ -133,11 +141,10 @@ struct asio_io_holder {
 // то же, владеет asio::io_context
 struct asio_io : noexport::asio_io_holder, asio_ref_io {
   explicit asio_io(starter_t = {});
-
-  static void rebind_context(any_connection_t& con, any_io_context_ref other);
 };
 
-struct asio_tls_connection : connection_i {
+// any_connection
+struct asio_tls_connection {
   noexport::single_read_assumption readdata;
   asio::ssl::stream<asio::ip::tcp::socket> sock;
   ssl_context_ptr sslctx;
@@ -146,15 +153,16 @@ struct asio_tls_connection : connection_i {
   // precondition: ctx != nullptr
   explicit asio_tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx);
 
-  bool try_read(std::span<byte_t>) noexcept override;
-  void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec) override;
-  size_t try_write(std::span<const byte_t>, io_error_code&) noexcept override;
-  void start_write(writer_node*) override;
-  dd::task<void> shutdown() noexcept override;
-  dd::task<void> handshake(io_error_code& ec, bool is_client) override;
-  bool is_https() override {
+  bool try_read(std::span<byte_t>) noexcept;
+  void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec);
+  size_t try_write(std::span<const byte_t>, io_error_code&) noexcept;
+  void start_write(writer_node*);
+  dd::task<void> shutdown() noexcept;
+  dd::task<void> handshake(io_error_code& ec, bool is_client);
+  bool is_https() const {
     return true;
   }
+  void rebind(void*, rebind_result&);
 };
 
 }  // namespace hidi
