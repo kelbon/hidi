@@ -104,6 +104,67 @@ CLIENT_TEST("blocked request body resumes when window grows") {
   REQUIRE(h.promise().result_or_rethrow().status == 200);
 }
 
+static streaming_body_t window_then_part(std::string_view window_part, const std::string& part,
+                                         bool& yielded) {
+  co_yield chunk(window_part, /*stable=*/true);
+  yielded = true;
+  co_yield part;
+}
+
+// кусок без chunk::stable может измениться, пока писатель ждёт окно, поэтому отправляется то, что было в
+// нём при co_yield
+CLIENT_TEST("not stable chunk is sent as it was yielded") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  constexpr uint32_t WINDOW = INITIAL_WINDOW_SIZE_FOR_CONNECTION_OVERALL;
+  constexpr uint32_t EXTRA = 100;
+  const std::string window_part(WINDOW, 'a');
+  std::string part(EXTRA, 'b');
+  bool yielded = false;
+  http_request req;
+  req.method = http_method_e::PUT;
+  req.path = "/";
+  req.authority = client.get_remote().to_string();
+  auto h = client
+               .send_streaming_request(std::move(req), window_then_part(window_part, part, yielded),
+                                       deadline_after(10s))
+               .start_and_detach(true);
+  on_scope_exit {
+    h.destroy();
+  };
+  for (;;) {
+    h2test_frame f = co_await server.receive_frame(deadline_after(5s));
+    if (f.hdr.type != frame_e::HEADERS)
+      continue;
+    hpack::ignore_headers_block(server.get_inner_connection()->decoder, f.data);
+    break;
+  }
+  size_t received = 0;
+  while (received < WINDOW)
+    received += (co_await server.receive_data(1)).hdr.length;
+  REQUIRE(received == WINDOW);
+  // окна исчерпаны, второй кусок отдан и ждёт окно
+  co_await server.sync();
+  co_await wait_until([&] { return yielded; }, ioctx);
+  part.assign(EXTRA, 'c');
+
+  co_await server.send_window_size_increment(1, EXTRA);
+  co_await server.send_window_size_increment(0, EXTRA);
+  std::string tail;
+  bool end_stream = false;
+  while (!end_stream) {
+    h2test_frame f = co_await server.receive_data(1);
+    tail.append(f.data.begin(), f.data.end());
+    end_stream = f.hdr.flags & flags::END_STREAM;
+  }
+  REQUIRE_EQ(tail, std::string(EXTRA, 'b'));
+  std::vector<header> ok{{":status", "200"}};
+  co_await server.send_rsp(1, ok);
+  co_await wait_until([&] { return h.done(); }, ioctx);
+  REQUIRE(h.promise().result_or_rethrow().status == 200);
+}
+
 static streaming_body_t empty_body(request_context) {
   co_return;
 }

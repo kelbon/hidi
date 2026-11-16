@@ -34,14 +34,20 @@ dd::task<void> send_echo_request(fuzzer& fuz, h2client& c, hreq req) try {
   REQUIRE(false);
 }
 
+static streaming_body_t as_streaming_body(dd::channel<std::span<const byte_t>> c) {
+  auto b = co_await c.begin();
+  for (; b != c.end(); (void)(co_await (++b)))
+    co_yield *b;
+}
+
 // sends requests, but body will be splitted into random chunks
 dd::task<void> send_echo_request_as_stream(fuzzer& fuz, h2client& c, hreq req) try {
   auto sleepcb = [&c](duration_t d, io_error_code& ec) -> dd::task<void> {
     any_timer timer = c.ioctx().create_timer();
     co_await net.sleep(timer, d, ec);
   };
-  auto bodystr =
-      streaming_body_with_trailers(fuz.chunks_delayed(req.request.body.data, 0, 30, sleepcb), req.trailers);
+  auto bodystr = streaming_body_with_trailers(
+      as_streaming_body(fuz.chunks_delayed(req.request.body.data, 0, 30, sleepcb)), req.trailers);
   req.request.body = {};
   http_response rsp = co_await c.send_streaming_request(req.request, std::move(bodystr), req.deadline);
   validate_echo_request(req, std::move(rsp));
@@ -62,7 +68,7 @@ static move_only_fn<streaming_body_t(http_response, memory_queue_ptr, request_co
     for (size_t i = 0; i < count; ++i) {
       if (fuz.rbool()) {
         std::string s = fuz.rstring(fuz.rint(1, 200));
-        co_yield {(byte_t*)s.data(), s.size()};
+        co_yield s;
       } else if (received.size() != sent.size()) {
         std::vector s = co_await q->next_chunk();
         received.append(s.begin(), s.end());

@@ -122,7 +122,30 @@ struct http_response {
   }
 };
 
-using streaming_body_t = dd::channel<std::span<const byte_t>>;
+namespace noexport {
+
+template <typename R>
+concept bytes_range = std::ranges::contiguous_range<R> && std::ranges::sized_range<R> &&
+                      (std::same_as<std::ranges::range_value_t<R>, char> ||
+                       std::same_as<std::ranges::range_value_t<R>, unsigned char> ||
+                       std::same_as<std::ranges::range_value_t<R>, std::byte>);
+
+}  // namespace noexport
+
+struct chunk {
+  std::span<const byte_t> data;
+  // true если данные не удаляться пока их пишут
+  bool stable = false;
+
+  template <noexport::bytes_range R>
+  chunk(R&& r, bool stable = false) noexcept
+      : data((const byte_t*)std::ranges::data(r), std::ranges::size(r)), stable(stable) {
+  }
+  template <size_t N>
+  chunk(const char (&)[N], bool stable = false) = delete;
+};
+
+using streaming_body_t = dd::channel<chunk>;
 
 struct request_context;
 

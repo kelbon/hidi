@@ -6,10 +6,10 @@
 
 namespace hidi {
 
-inline dd::channel<std::span<const byte_t>> streambody() {
+inline streaming_body_t streambody() {
   std::string_view answer = "hello world";
   for (const char& c : answer)
-    co_yield {(const byte_t*)&c, 1};
+    co_yield std::string_view(&c, 1);
 }
 
 struct h2spec_server : h2server {

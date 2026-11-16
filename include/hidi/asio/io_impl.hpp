@@ -71,6 +71,7 @@ struct asio_connection {
     co_return;
   }
   static constexpr bool is_https = false;
+  static constexpr bool is_buffered = false;
   void rebind(void*, rebind_result&);
 };
 
@@ -158,6 +159,7 @@ struct asio_tls_connection {
   dd::task<void> shutdown() noexcept;
   dd::task<void> handshake(io_error_code& ec, bool is_client);
   static constexpr bool is_https = true;
+  static constexpr bool is_buffered = false;
   void rebind(void*, rebind_result&);
 };
 

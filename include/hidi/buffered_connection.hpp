@@ -128,6 +128,7 @@ struct buffered_connection {
     return inner.handshake(ec, is_client);
   }
   static constexpr bool is_https = Inner::is_https;
+  static constexpr bool is_buffered = true;
 
   [[nodiscard]] bool has_work() const noexcept {
     return !outbuf.empty() || !waiters.empty();
