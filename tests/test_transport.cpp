@@ -1,6 +1,7 @@
 
 #include "test_connection.hpp"
 #include "hidi/asio/io_impl.hpp"
+#include "hidi/buffered_connection.hpp"
 
 #include <boost/asio/ssl.hpp>
 
@@ -386,10 +387,30 @@ TEST("timer cancel after expiry, before the callback") {
   REQUIRE(!b.is_armed());
 }
 
-// h2server_mt принимает соединение в одном потоке и переносит его в io_context другого (rebind_context).
+// после rebind сокет в новом контексте и неблокирующий, у буферизованного соединения писатель и таймер
+// shutdown тоже в новом контексте
+template <typename C>
+static void check_rebinded(any_connection_t& con, bool buffered, boost::asio::io_context& expected,
+                           any_io_context& target) {
+  C* c = nullptr;
+  if (buffered) {
+    auto* b = aa::any_cast<buffered_connection<C>>(&con);
+    REQUIRE(b);
+    REQUIRE(b->io.native() == target.native());
+    c = &b->inner;
+  } else {
+    c = aa::any_cast<C>(&con);
+  }
+  REQUIRE(c);
+  REQUIRE(c->sock.lowest_layer().non_blocking());
+  REQUIRE(&c->sock.get_executor().context() == &expected);
+}
+
+// h2server_mt принимает соединение в одном потоке и переносит его в io_context другого (rebind).
 // Соединение должно остаться неблокирующим: иначе синхронный write_some в try_write при полном буфере
 // блокирует весь рабочий поток
 TRANSPORT_TEST("connection stays non-blocking after rebind") {
+  const bool buffered = GENERATE(false, true);
   boost::asio::io_context other;
   bool tls = false;
   SECTION("TCP") {
@@ -399,8 +420,9 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
   }
   any_io_context ioctx = make_asio_io_context(rawio);
   any_io_context target = make_asio_io_context(other);
-  any_acceptor a =
-      ioctx.create_acceptor(localhost(), /*reuse_address=*/true, {}, tls ? test_server_ssl_ctx() : nullptr);
+  any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true,
+                                         tcp_connection_options{.buffer_writes = buffered},
+                                         tls ? test_server_ssl_ctx() : nullptr);
   a.listen();
   any_connection_t peer =
       co_await ioctx.create_connection_client({a.get_local_endpoint()}, deadline_after(5s), {}, nullptr);
@@ -410,18 +432,12 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
 
   rebind_result r;
   con.rebind(target.native(), r);
+  REQUIRE(r.ptr);
 
-  if (tls) {
-    auto* c = aa::any_cast<asio_tls_connection>(&con);
-    REQUIRE(c);
-    REQUIRE(c->sock.lowest_layer().non_blocking());
-    REQUIRE(&c->sock.get_executor().context() == &other);
-  } else {
-    auto* c = aa::any_cast<asio_connection>(&con);
-    REQUIRE(c);
-    REQUIRE(c->sock.non_blocking());
-    REQUIRE(&c->sock.get_executor().context() == &other);
-  }
+  if (tls)
+    check_rebinded<asio_tls_connection>(con, buffered, other, target);
+  else
+    check_rebinded<asio_connection>(con, buffered, other, target);
   co_await peer.shutdown();
 }
 
