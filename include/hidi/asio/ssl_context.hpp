@@ -11,12 +11,12 @@
 namespace hidi {
 
 struct ssl_context;
-// must be used only in one thread, multithread using of ssl_context is not safe bcs of open ssl
+
 using ssl_context_ptr = boost::intrusive_ptr<ssl_context>;
 
 struct ssl_context {
  private:
-  size_t refcount = 0;
+  std::atomic<size_t> refcount = 0;
 
   // private, must not be created on stack
   ~ssl_context() = default;
@@ -30,11 +30,10 @@ struct ssl_context {
   void operator=(ssl_context&&) = delete;
 
   friend void intrusive_ptr_add_ref(ssl_context* p) noexcept {
-    ++p->refcount;
+    p->refcount.fetch_add(1, std::memory_order_relaxed);
   }
   friend void intrusive_ptr_release(ssl_context* p) noexcept {
-    --p->refcount;
-    if (p->refcount == 0)
+    if (p->refcount.fetch_sub(1, std::memory_order_acq_rel) == 1)
       delete p;
   }
 };
