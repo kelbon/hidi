@@ -492,5 +492,100 @@ CLIENT_TEST("client request context") {
   check_empty();
 }
 
+// DATA стрима `id` до END_STREAM. Трейлеров (HEADERS) не ожидается
+static dd::task<std::vector<h2test_frame>> receive_data_until_end_stream(test_h2connection& server,
+                                                                         stream_id_t id) {
+  std::vector<h2test_frame> frames;
+  for (;;) {
+    h2test_frame f =
+        co_await server.next_frame(deadline_after(5s), ping_e::RESPONSE, window_e::SKIP,
+                                   std::source_location::current(), /*answer_window_update=*/true);
+    REQUIRE(f.hdr.type == frame_e::DATA);
+    REQUIRE_EQ(f.hdr.streamid, id);
+    const bool end = f.hdr.flags & flags::END_STREAM;
+    frames.push_back(std::move(f));
+    if (end)
+      co_return frames;
+  }
+}
+
+static std::string concat_data(const std::vector<h2test_frame>& frames) {
+  std::string s;
+  for (const h2test_frame& f : frames)
+    s.append(f.data.begin(), f.data.end());
+  return s;
+}
+
+// последний кусок с chunk::end_stream, после него канал завершается
+static streaming_body_t body_ending_with_end_stream(bool stable) {
+  co_yield chunk(std::string_view("abc"), stable);
+  co_yield chunk(std::string_view("def"), stable, /*end_stream=*/true);
+}
+
+// END_STREAM уходит с последним куском, без пустого DATA. Трейлеры после него не отправляются, даже если
+// их заполнили
+CLIENT_TEST("streaming body ends with chunk::end_stream") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  // stable на буферизованном соединении - запись без копирования
+  const bool stable = GENERATE(false, true);
+  stream_body_maker_t body = [&](http_headers_t& trailers, request_context) {
+    trailers = {{"x-trailer", "value"}};
+    return body_ending_with_end_stream(stable);
+  };
+  int status = 0;
+  auto request = [&]() -> dd::task<void> {
+    http_response rsp = co_await client.send_streaming_request(make_request(client, http_method_e::PUT),
+                                                               std::move(body), deadline_after(5s));
+    status = rsp.status;
+  };
+  request().start_and_detach();
+
+  h2test_frame h = co_await server.next_frame(deadline_after(5s), ping_e::RESPONSE, window_e::SKIP);
+  REQUIRE(h.hdr.type == frame_e::HEADERS);
+  REQUIRE(!(h.hdr.flags & flags::END_STREAM));
+  std::vector<h2test_frame> frames = co_await receive_data_until_end_stream(server, h.hdr.streamid);
+  REQUIRE_EQ(concat_data(frames), "abcdef");
+  for (const h2test_frame& f : frames)
+    REQUIRE(!f.data.empty());
+  std::vector<header> headers{{":status", "200"}};
+  co_await server.send_rsp(h.hdr.streamid, headers);
+  co_await wait_until([&] { return status != 0; }, ioctx);
+  REQUIRE_EQ(status, 200);
+  // трейлеров нет
+  co_await server.sync();
+}
+
+// тело больше окна стрима отправляется кусками (не блокируя другие стримы), END_STREAM - с последним из них
+CLIENT_TEST("big body ends without empty DATA") {
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  http_request req = make_request(client, http_method_e::PUT);
+  std::string expected(200'000, 'x');
+  for (size_t i = 0; i < expected.size(); ++i)
+    expected[i] = char('a' + i % 26);
+  req.body.data.assign(expected.begin(), expected.end());
+  int status = 0;
+  auto request = [&]() -> dd::task<void> {
+    http_response rsp = co_await client.send_request(std::move(req), deadline_after(5s));
+    status = rsp.status;
+  };
+  request().start_and_detach();
+
+  h2test_frame h = co_await server.next_frame(deadline_after(5s), ping_e::RESPONSE, window_e::SKIP);
+  REQUIRE(h.hdr.type == frame_e::HEADERS);
+  REQUIRE(!(h.hdr.flags & flags::END_STREAM));
+  std::vector<h2test_frame> frames = co_await receive_data_until_end_stream(server, h.hdr.streamid);
+  REQUIRE(concat_data(frames) == expected);
+  REQUIRE(!frames.back().data.empty());
+  std::vector<header> headers{{":status", "200"}};
+  co_await server.send_rsp(h.hdr.streamid, headers);
+  co_await wait_until([&] { return status != 0; }, ioctx);
+  REQUIRE_EQ(status, 200);
+  co_await server.sync();
+}
+
 REGISTER_TEST_LISTENER(moko3::gtest_listener);
 MOKO3_MAIN;
