@@ -433,7 +433,7 @@ struct h2connection {
     dd::attach_list(exe, blocked_writers.pop_all());
   }
 
-  write_awaiter write(std::span<const byte_t> bytes, io_error_code& ec) {
+  auto write(std::span<const byte_t> bytes, io_error_code& ec) {
     return write_awaiter{tcpcon, ec, bytes};
   }
   read_awaiter read(std::span<byte_t> buf, io_error_code& ec) {
