@@ -116,20 +116,20 @@ static void generate_http2_headers_to(const h2stream& node, hpack::encoder& enco
   }
 }
 
-// precondition: node.req.data is not empty
 // forms new data frame
 // also handles window size changes
 // returns length of result DATA frame
 // or 0 if cannot send because of control flow
+// `end_stream` set END_STREAM if last frame
+// precondition: unhandled_bytes != 0
 // precondition: 'out' contains atleast 9 valid bytes
-template <bool Streaming>
 [[nodiscard]] static cfint_t fill_data_header(const h2stream& node, const h2connection& con,
-                                              size_t unhandled_bytes, byte_t* out) noexcept {
+                                              size_t unhandled_bytes, bool allow_end_stream,
+                                              byte_t* out) noexcept {
   using enum frame_e;
   using namespace flags;
 
-  assert(!node.req.body.data.empty());
-  assert(node.req.body.data.size() >= unhandled_bytes);
+  assert(unhandled_bytes != 0);
   frame_header header;
   cfint_t len = std::min<int64_t>({int64_t(unhandled_bytes), con.remote_settings.max_frame_size,
                                    node.lr_streamlevel_windowsize, con.receiver_window_size});
@@ -137,67 +137,11 @@ template <bool Streaming>
     return len;
   header.length = len;
   header.type = DATA;
-  if constexpr (!Streaming)
-    header.flags = unhandled_bytes == header.length ? END_STREAM : EMPTY_FLAGS;
-  else
-    header.flags = EMPTY_FLAGS;
+  header.flags = allow_end_stream && unhandled_bytes == header.length ? END_STREAM : EMPTY_FLAGS;
   header.streamid = node.streamid;
   header.form(out);
 
   return header.length;
-}
-
-template <bool Streaming>
-static dd::task<void> write_data(stream_ptr work, h2connection_ptr con, io_error_code& ec) try {
-  assert(con && work);
-  http_body_bytes& data = work->req.body.data;
-
-  // uses guarantee about FRAME_LEN_BYTES before .data()
-  static_assert(
-      std::is_same_v<typename decltype(work->req.body.data)::allocator_type, detail::allocator_p9<byte_t>>);
-
-  cfint_t framelen = 0;
-  byte_t* in = data.data();
-  byte_t* data_end = in + data.size();
-
-  for (; in != data_end; in += framelen) {
-    if (work->finished() || con->is_dropped())
-      co_return;
-
-    framelen = fill_data_header<Streaming>(*work, *con, std::distance(in, data_end), in - H2FHL);
-    if (framelen <= 0) [[unlikely]] {
-      HTTP2_LOG_TRACE(con->logctx,
-                      "cannot send bytes now! unhandled: {}, max_frame_len: {}, "
-                      "stream wsz {}, con wsz: {}",
-                      std::distance(in, data_end), con->remote_settings.max_frame_size,
-                      work->lr_streamlevel_windowsize, con->receiver_window_size);
-      co_await con->wait_writer_event();
-      framelen = 0;  // avoid in += framelen which is < 0
-      continue;
-    }
-    HTTP2_LOG_TRACE(con->logctx,
-                    "FRAME for stream {}, len: {}, unhandled: {}, rws: {}, "
-                    "rs max frame max: {}, max_frame_size: {}, DATA: {}",
-                    work->streamid, framelen, std::distance(in, data_end), con->receiver_window_size,
-                    work->lr_streamlevel_windowsize, con->remote_settings.max_frame_size,
-                    std::string_view((const char*)in, framelen));
-    // окно уменьшается до записи
-    decrease_window_size(con->receiver_window_size, framelen, con->logctx);           // connection
-    decrease_window_size(work->lr_streamlevel_windowsize, framelen, work->logctx());  // stream
-    // send frame
-    HIDI_WAIT_WRITE(*con);
-    co_await con->write(std::span(in - H2FHL, framelen + H2FHL), ec);
-
-    if (ec)
-      co_return;
-  }  // end loop
-  HTTP2_LOG_TRACE(con->logctx, "DATA for stream {} successfully sended", work->streamid);
-  co_return;
-} catch (std::exception& e) {
-  con->finish_request(*work, reqerr_e::UNKNOWN_ERR);
-  send_rst_stream(con, work->streamid, errc_e::CANCEL).start_and_detach();
-  HTTP2_LOG(con->logctx, ERROR, "writing DATA for stream {} ended with error, err: {}", work->streamid,
-            e.what());
 }
 
 // блокирует запись. Разблокируется только после write_continuations
@@ -209,6 +153,74 @@ static void continuations_begin(h2connection& con) {
 static void continuations_end(h2connection& con) noexcept {
   dd::any_executor_ref exe{con.ioctx};
   con.continuation_gateway.open(exe);
+}
+
+template <bool Inplace>
+using data_ptr_t = std::conditional_t<Inplace, byte_t*, const byte_t*>;
+
+// Inplace = true: можно менять [in-9; data_end), заголовок фрейма пишется прямо туда
+//   pre: H2FHL байт перед `in` можно перезаписать
+// Inplace = false: заголовок и DATA пишутся двумя записями write с блокировкой
+//   pre: [in, data_end) живёт до конца write_data
+// pre: in != data_end
+template <bool Inplace>
+static dd::task<void> write_data(h2stream& work, h2connection& con, data_ptr_t<Inplace> in,
+                                 data_ptr_t<Inplace> data_end, bool allow_end_stream, io_error_code& ec) try {
+  assert(in != data_end);
+  cfint_t framelen = 0;
+  for (; in != data_end; in += framelen) {
+    if (work.finished() || con.is_dropped())
+      co_return;
+
+    byte_t hdrbuf[H2FHL];
+    byte_t* hdr = +hdrbuf;
+    if constexpr (Inplace)
+      hdr = in - H2FHL;
+    framelen = fill_data_header(work, con, std::distance(in, data_end), allow_end_stream, hdr);
+    if (framelen <= 0) [[unlikely]] {
+      HTTP2_LOG_TRACE(con.logctx,
+                      "cannot send bytes now! unhandled: {}, max_frame_len: {}, "
+                      "stream wsz {}, con wsz: {}",
+                      std::distance(in, data_end), con.remote_settings.max_frame_size,
+                      work.lr_streamlevel_windowsize, con.receiver_window_size);
+      co_await con.wait_writer_event();
+      framelen = 0;  // avoid in += framelen which is < 0
+      continue;
+    }
+    HTTP2_LOG_TRACE(con.logctx,
+                    "FRAME for stream {}, len: {}, unhandled: {}, rws: {}, "
+                    "rs max frame max: {}, max_frame_size: {}, DATA: {}",
+                    work.streamid, framelen, std::distance(in, data_end), con.receiver_window_size,
+                    work.lr_streamlevel_windowsize, con.remote_settings.max_frame_size,
+                    std::string_view((const char*)in, framelen));
+    // окно уменьшается до записи
+    decrease_window_size(con.receiver_window_size, framelen, con.logctx);           // connection
+    decrease_window_size(work.lr_streamlevel_windowsize, framelen, work.logctx());  // stream
+    // send frame
+    HIDI_WAIT_WRITE(con);
+    if constexpr (Inplace) {
+      co_await con.write(std::span(in - H2FHL, framelen + H2FHL), ec);
+    } else {
+      // переиспользует лок для атомарной записи
+      continuations_begin(con);
+      on_scope_exit {
+        continuations_end(con);
+      };
+      co_await con.write(std::span(hdrbuf), ec);
+      if (!ec)
+        co_await con.write(std::span(in, framelen), ec);
+    }
+
+    if (ec)
+      co_return;
+  }  // end loop
+  HTTP2_LOG_TRACE(con.logctx, "DATA for stream {} successfully sended", work.streamid);
+  co_return;
+} catch (std::exception& e) {
+  con.finish_request(work, reqerr_e::UNKNOWN_ERR);
+  send_rst_stream(h2connection_ptr(&con), work.streamid, errc_e::CANCEL).start_and_detach();
+  HTTP2_LOG(con.logctx, ERROR, "writing DATA for stream {} ended with error, err: {}", work.streamid,
+            e.what());
 }
 
 // writes CONTINUATION frames
@@ -321,11 +333,13 @@ dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callback
       co_return;
     if (chunk.empty())
       continue;
-    snode.req.body.data.resize(chunk.size(), uninitialized_byte);
-    memcpy(snode.req.body.data.data(), chunk.data(), chunk.size());
+    http_body_bytes& data = snode.req.body.data;
+    data.resize(chunk.size(), uninitialized_byte);
+    memcpy(data.data(), chunk.data(), chunk.size());
     HTTP2_LOG_TRACE(con->logctx, "sendind DATA part for stream {}, len: {}, bodystr: \"{}\"", snode.streamid,
-                    snode.req.body.data.size(), snode.req.body.strview());
-    co_await write_data</*Streaming=*/true>(node, con, ec);
+                    data.size(), snode.req.body.strview());
+    co_await write_data</*Inplace=*/true>(snode, *con, data.data(), data.data() + data.size(),
+                                          /*allow_end_stream=*/false, ec);
 
     if (ec)
       goto end;
@@ -492,7 +506,9 @@ dd::job start_writer_for(h2connection_ptr con, writer_on_network_err_t neterrcb,
         // один стрим не должен блокировать все другие
         write_body_detached<IS_CLIENT>(node, con, cbs);
       } else if (!node->req.body.data.empty()) {
-        co_await write_data</*Streaming=*/false>(node, con, ec);
+        http_body_bytes& body = node->req.body.data;
+        co_await write_data</*Inplace=*/true>(*node, *con, body.data(), body.data() + body.size(),
+                                              /*allow_end_stream=*/true, ec);
 
         if (ec || con->is_dropped()) {
           if (ec != boost::asio::error::operation_aborted)
