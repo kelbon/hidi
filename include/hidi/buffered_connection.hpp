@@ -233,9 +233,9 @@ struct buffered_connection {
       // запланированный писатель мог проснуться после ошибки, тогда отправлять уже нечего
       while (c->has_work() && !c->write_ec) {
         nodes_t moved = move_waiters_to_outbuf(*c);
-        std::swap(c->sendbuf, c->outbuf);
-        // перенесённые уже в sendbuf, пока он пишется, они могут писать дальше в outbuf
+        // перенесённые дописывают в outbuf (пока не заполнится), это уходит той же записью
         resume_all(moved);
+        std::swap(c->sendbuf, c->outbuf);
         io_error_code ec;
         co_await write_awaiter(c->inner, ec, c->sendbuf);
         c->sendbuf.clear();
