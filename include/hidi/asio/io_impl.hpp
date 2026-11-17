@@ -8,6 +8,8 @@
 
 #include <boost/intrusive/slist.hpp>
 
+#include <vector>
+
 #include <kelcoro/job.hpp>
 
 namespace hidi {
@@ -17,10 +19,9 @@ using starter_t = move_only_fn<dd::task<void>(boost::asio::ip::tcp::socket&, dea
 namespace noexport {
 
 struct single_read_assumption {
-  static constexpr size_t readen_capacity = (1 << 14) + 9;
-  unsigned char readen[readen_capacity];
-  unsigned char* readen_start = readen;
-  unsigned char* readen_end = readen;
+  std::vector<unsigned char> readen = std::vector<unsigned char>((1 << 14) + 9);
+  unsigned char* readen_start = readen.data();
+  unsigned char* readen_end = readen.data();
   ZAL_PIN;
 };
 
