@@ -34,18 +34,6 @@ void rebind_tcp_executor(Connection& c, asio::io_context& new_ioctx) {
   c.sock = move_socket_to(c.sock, new_ioctx);
 }
 
-// для соединения с `asio::ssl::stream<asio::ip::tcp::socket> sock` и `ssl_context_ptr sslctx`
-template <typename Connection>
-void rebind_tls_executor(Connection& c, asio::io_context& new_ioctx) {
-  // rebind делается до TLS handshake, состояния TLS ещё нет, поэтому
-  // ssl::stream пересоздаётся целиком. Его внутренние таймеры (pending_read_ / pending_write_) создаются на
-  // executor потока и при замене только сокета остались бы на старом io_context: ожидание одной операции TLS
-  // другой (например чтение, которому нужно записать ответ на KeyUpdate, пока идёт запись) завершалось бы в
-  // чужом потоке
-  c.sock = asio::ssl::stream<asio::ip::tcp::socket>(move_socket_to(c.sock.lowest_layer(), new_ioctx),
-                                                    c.sslctx->ctx);
-}
-
 [[nodiscard]] inline bool do_try_read(single_read_assumption& rd, std::span<byte_t> buf) noexcept {
   size_t avail = rd.readen_end - rd.readen_start;
   bool b = avail >= buf.size();
@@ -73,41 +61,19 @@ inline dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& e
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
 
-// boost asio в tls игнорирует остальные буферы кроме первого, из-за чего оптимизация
-// с чтением заранее не работает, так что этот код обходит проблему
-inline dd::job do_tls_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& ec,
-                                std::coroutine_handle<> callback) {
-  single_read_assumption& rd = c.readdata;
-  while (!userbuf.empty()) {
-    if (userbuf.size() >= rd.readen.size()) {
-      size_t n = co_await net.read_some(c.sock, userbuf, ec);
-      if (ec) [[unlikely]]
-        break;
-      userbuf = userbuf.subspan(n);
-      continue;
-    }
-    size_t n = co_await net.read_some(c.sock, std::span(rd.readen), ec);
-    if (ec) [[unlikely]]
-      break;
-    size_t copied = std::min(n, userbuf.size());
-    memcpy(userbuf.data(), rd.readen.data(), copied);
-    userbuf = userbuf.subspan(copied);
-    rd.readen_start = rd.readen.data() + copied;
-    rd.readen_end = rd.readen.data() + n;
-  }
-  co_await dd::this_coro::destroy_and_transfer_control_to(callback);
+// отдаёт в начало `buf` всё непрочитанное из `rd`, возвращает ещё не заполненную часть `buf`
+// pre: непрочитанного меньше buf.size() (try_read вернул false)
+inline std::span<byte_t> take_readen(single_read_assumption& rd, std::span<byte_t> buf) noexcept {
+  size_t avail = rd.readen_end - rd.readen_start;
+  assert(avail < buf.size());
+  memcpy(buf.data(), rd.readen_start, avail);
+  rd.readen_start = rd.readen_end = rd.readen.data();
+  return buf.subspan(avail);
 }
 
 inline void do_start_read(auto& self, std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
   // assumes only one reader at one time
-  size_t avail = self.readdata.readen_end - self.readdata.readen_start;
-  assert(avail < buf.size());  // start_read must be invoked only if try_read failed
-  memcpy(buf.data(), self.readdata.readen_start, avail);
-  self.readdata.readen_start = self.readdata.readen_end = self.readdata.readen.data();
-  if constexpr (std::is_same_v<decltype(self.sock), asio::ssl::stream<asio::ip::tcp::socket>>)
-    (void)do_tls_read_some(self, suffix(buf, buf.size() - avail), ec, h);
-  else
-    (void)do_read_some(self, suffix(buf, buf.size() - avail), ec, h);
+  (void)do_read_some(self, take_readen(self.readdata, buf), ec, h);
 }
 
 inline void close_tcp_sock(auto& tcp_sock) {
@@ -117,7 +83,6 @@ inline void close_tcp_sock(auto& tcp_sock) {
   ec = tcp_sock.cancel(ec);
   // dont stop on errors, i need to stop connection somehow
   (void)ec;
-  // Do not do SSL shutdown, useless errors and wasting time
   ec = tcp_sock.shutdown(asio::socket_base::shutdown_both, ec);
   (void)ec;
   ec = tcp_sock.close(ec);

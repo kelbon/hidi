@@ -9,7 +9,7 @@
 
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
-#include <boost/asio/ssl/host_name_verification.hpp>
+#include <boost/asio/ssl/error.hpp>
 
 namespace {
 
@@ -45,7 +45,7 @@ static any_connection_t make_tcp_connection(asio::ip::tcp::socket sock, const tc
 
 static any_connection_t make_tls_connection(asio::ip::tcp::socket sock, ssl_context_ptr ctx,
                                             const tcp_connection_options& opts, any_io_context_ref io) {
-  return any_connection_t(std::in_place_type<buffered_connection<asio_tls_connection>>, io,
+  return any_connection_t(std::in_place_type<buffered_connection<tls_connection>>, io,
                           write_buffer_limit(opts), std::move(sock), std::move(ctx));
 }
 
@@ -59,45 +59,120 @@ static void do_start_write(auto& sock, writer_node* n) {
   });
 }
 
-asio_tls_connection::asio_tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx)
-    // Note: order
-    : sock(std::move(s), ctx->ctx), sslctx(std::move(ctx)) {
-  sock.lowest_layer().non_blocking(true);
+tls_connection::tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx)
+    : sock(std::move(s)), sslctx(std::move(ctx)), session(sslctx->ctx.native_handle()) {
+  sock.non_blocking(true);
 }
 
-bool asio_tls_connection::try_read(std::span<byte_t> buf) noexcept {
+// ошибка чтения из сокета, как её сообщает TLS: конец потока без close_notify - обрыв
+// (close_notify пира сообщает tls_session::decrypt как eof)
+static void set_tls_read_error(io_error_code& ec) noexcept {
+  if (ec == asio::error::eof)
+    ec = asio::ssl::error::stream_truncated;
+}
+
+// заполняет `userbuf` расшифрованным. Пока его не хватает, читает из сокета
+// pre: c.readdata пуст, userbuf не пуст
+static dd::job tls_read(tls_connection& c, std::span<byte_t> userbuf, io_error_code& ec,
+                        std::coroutine_handle<> callback) {
+  noexport::single_read_assumption& rd = c.readdata;
+  for (;;) {
+    // расшифровывает сразу в буфер читателя. Первый проход ещё ничего не прочитал из сокета, но в сессии
+    // могло остаться принятое раньше (например сразу за handshake) или ошибка, отложенная прошлым чтением
+    userbuf = userbuf.subspan(c.session.decrypt(userbuf, ec));
+    if (userbuf.empty()) {
+      // остальное принятое (сколько поместится) - заранее в readdata, оттуда его отдаст try_read
+      // ошибку здесь вернёт следующее чтение: она останется в сессии
+      io_error_code ignored;
+      rd.readen_end = rd.readen_start + c.session.decrypt(rd.readen, ignored);
+      break;
+    }
+    if (ec)
+      break;
+    size_t n = co_await net.read_some(c.sock, c.session.input(), ec);
+    if (ec) [[unlikely]] {
+      set_tls_read_error(ec);
+      break;
+    }
+    c.session.commit(n);
+  }
+  co_await dd::this_coro::destroy_and_transfer_control_to(callback);
+}
+
+bool tls_connection::try_read(std::span<byte_t> buf) noexcept {
   return noexport::do_try_read(readdata, buf);
 }
 
-void asio_tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
-  noexport::do_start_read(*this, h, buf, ec);
+void tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
+  // assumes only one reader at one time
+  (void)tls_read(*this, noexport::take_readen(readdata, buf), ec, h);
 }
 
-size_t asio_tls_connection::try_write(std::span<const byte_t>, io_error_code&) noexcept {
-  // Синхронный ssl::stream::write_some на неблокирующем сокете нельзя использовать: если сокет заполнится
-  // посреди записи зашифрованных данных, asio выбросит их остаток (ssl::detail::io, case want_output),
-  // а вызывающему сообщит, что открытый текст записан. Поток TLS будет испорчен.
-  // Поэтому для TLS запись всегда асинхронная
+size_t tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
+  assert(unsent.empty());
+  sendbuf.clear();
+  session.encrypt(buf, sendbuf, ec);
+  if (ec)
+    return 0;
+  // в отличие от ssl::stream::write_some, который при заполненном сокете теряет остаток шифротекста,
+  // здесь остаток остаётся в sendbuf
+  size_t written = sock.write_some(asio::buffer(sendbuf), ec);
+  if (ec == asio::error::would_block)
+    ec.clear();  // not a error
+  if (ec)
+    return 0;
+  if (written == sendbuf.size())
+    return buf.size();
+  unsent = std::span<const byte_t>(sendbuf).subspan(written);
   return 0;
 }
 
-void asio_tls_connection::start_write(writer_node* n) {
-  do_start_write(sock, n);
+void tls_connection::start_write(writer_node* n) {
+  assert(n);
+  assert(!unsent.empty());
+  asio::async_write(sock, asio::buffer(unsent.data(), unsent.size()),
+                    [this, n](const io_error_code& ec, size_t) {
+                      unsent = {};
+                      // 'ec' обрабатывает callback
+                      n->ec = ec;
+                      n->callback.resume();
+                    });
 }
 
-dd::task<void> asio_tls_connection::shutdown() noexcept {
-  noexport::close_tcp_sock(sock.lowest_layer());
+dd::task<void> tls_connection::shutdown() noexcept {
+  noexport::close_tcp_sock(sock);
   co_return;
 }
 
-dd::task<void> asio_tls_connection::handshake(io_error_code& ec, bool is_client) {
-  co_await net.handshake(sock, is_client ? asio::ssl::stream_base::client : asio::ssl::stream_base::server,
-                         ec);
+dd::task<void> tls_connection::handshake(io_error_code& ec, bool is_client) {
+  std::vector<byte_t> to_send;
+  for (;;) {
+    bool done = session.handshake(to_send, is_client, ec);
+    if (!to_send.empty()) {
+      // при ошибке handshake в to_send алерт: пир узнает причину отказа, а не просто увидит обрыв
+      io_error_code write_ec;
+      co_await net.write(sock, std::span<const byte_t>(to_send), write_ec);
+      if (!ec)
+        ec = write_ec;
+      to_send.clear();
+    }
+    if (ec)
+      co_return;
+    // то, что пир прислал сразу за handshake, осталось в сессии и достанется первому чтению
+    if (done)
+      co_return;
+    size_t n = co_await net.read_some(sock, session.input(), ec);
+    if (ec) {
+      set_tls_read_error(ec);
+      co_return;
+    }
+    session.commit(n);
+  }
 }
 
-void asio_tls_connection::rebind(void* p, rebind_result& r) {
+void tls_connection::rebind(void* p, rebind_result& r) {
   auto* ctx = reinterpret_cast<asio_ref_io*>(p);
-  noexport::rebind_tls_executor(*this, ctx->ioctx);
+  noexport::rebind_tcp_executor(*this, ctx->ioctx);
   r.ptr = ctx;
 }
 
@@ -141,25 +216,31 @@ static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_soc
                                                    const tcp_connection_options& opts,
                                                    const remote_and_local_endpoints& ep,
                                                    any_io_context_ref io) {
-  namespace ssl = asio::ssl;
   any_connection_t res;
-  asio_tls_connection& c = res.emplace<buffered_connection<asio_tls_connection>>(
-                                  io, write_buffer_limit(opts), std::move(tcp_sock), std::move(sslctx))
-                               .inner;
-  if (opts.host_for_name_verification) {
-    c.sock.set_verify_mode(ssl::verify_peer);
-    c.sock.set_verify_callback(asio::ssl::host_name_verification(*opts.host_for_name_verification));
+  SSL* ssl = res.emplace<buffered_connection<tls_connection>>(io, write_buffer_limit(opts),
+                                                              std::move(tcp_sock), std::move(sslctx))
+                 .inner.session.native_handle();
+  if (const std::optional<std::string>& host = opts.host_for_name_verification) {
+    // имя (или IP адрес) сверяется с сертификатом при проверке его цепочки
+    X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
+    io_error_code ipec;
+    (void)asio::ip::make_address(*host, ipec);
+    int ok = ipec ? X509_VERIFY_PARAM_set1_host(param, host->data(), host->size())
+                  : X509_VERIFY_PARAM_set1_ip_asc(param, host->c_str());
+    if (!ok)
+      throw network_exception("[TCP/SSL] cannot set host for verification: {}", *host);
+    SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
   } else {
-    c.sock.set_verify_mode(ssl::verify_none);
+    SSL_set_verify(ssl, SSL_VERIFY_NONE, nullptr);
   }
   if (!opts.is_primal_connection)
-    SSL_set_mode(c.sock.native_handle(), SSL_MODE_RELEASE_BUFFERS);
+    SSL_set_mode(ssl, SSL_MODE_RELEASE_BUFFERS);
   // https://www.rfc-editor.org/rfc/rfc9113.html#section-9.2
   // SNI, по RFC 6066 только для доменного имени, не для IP адреса
   if (const std::string* host = ep.remote.fqdn()) {
     io_error_code ipec;
     (void)asio::ip::make_address(*host, ipec);
-    if (ipec && !SSL_set_tlsext_host_name(c.sock.native_handle(), host->c_str()))
+    if (ipec && !SSL_set_tlsext_host_name(ssl, host->c_str()))
       throw network_exception("[TCP/SSL] cannot set SNI host name: {}", *host);
   }
   return res;

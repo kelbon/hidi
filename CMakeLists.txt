@@ -42,6 +42,7 @@ add_library(hidilib ${CMAKE_CURRENT_SOURCE_DIR}/src/http_base.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/io_impl.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/io.cpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/src/asio/ssl_context.cpp
+                  ${CMAKE_CURRENT_SOURCE_DIR}/src/tls_session.cpp
             )
 
 target_include_directories(hidilib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
