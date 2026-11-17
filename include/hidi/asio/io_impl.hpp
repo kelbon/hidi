@@ -4,6 +4,7 @@
 #include "hidi/asio/ssl_context.hpp"
 #include "hidi/asio/timer.hpp"
 #include "hidi/tcp_connection_options.hpp"
+#include "hidi/tls_session.hpp"
 #include "hidi/utils/any_io_context.hpp"
 
 #include <boost/intrusive/slist.hpp>
@@ -113,19 +114,31 @@ struct asio_io : noexport::asio_io_holder, asio_ref_io {
   explicit asio_io(starter_t = {});
 };
 
-// any_connection используется всегда под buffered_connection
-struct asio_tls_connection {
+// any_connection, используется всегда под buffered_connection
+// TCP соединение с TLS (tls_session)
+struct tls_connection {
+  asio::ip::tcp::socket sock;
+  // расшифрованное, но ещё не отданное читателю
   noexport::single_read_assumption readdata;
-  asio::ssl::stream<asio::ip::tcp::socket> sock;
   ssl_context_ptr sslctx;
+  tls_session session;
+  // шифротекст последней записи, хранится для переиспользования памяти
+  std::vector<byte_t> sendbuf;
+  // часть sendbuf, которую try_write не смог записать в сокет сразу. Её дописывает start_write
+  std::span<const byte_t> unsent;
 
   // precondition: ctx != nullptr
-  explicit asio_tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx);
+  explicit tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx);
 
   bool try_read(std::span<byte_t>) noexcept;
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec);
-  size_t try_write(std::span<const byte_t>, io_error_code&) noexcept;
+  // шифрует `buf` целиком одним вызовом и пишет в сокет сколько получится
+  // возвращает buf.size(), если записано всё, иначе 0: по числу записанных байт шифротекста нельзя сказать,
+  // сколько байт `buf` доставлено. Остаток шифротекста допишет start_write
+  size_t try_write(std::span<const byte_t> buf, io_error_code&) noexcept;
+  // pre: только что try_write тех же данных вернул 0 без ошибки
   void start_write(writer_node*);
+  // close_notify не отправляется
   dd::task<void> shutdown() noexcept;
   dd::task<void> handshake(io_error_code& ec, bool is_client);
   static constexpr bool is_https = true;

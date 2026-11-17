@@ -44,5 +44,7 @@ add_http2_test(transport)
 add_http2_test(hpack_table_size)
 add_http2_test(server_graceful_shutdown)
 add_http2_test(mt_server)
+add_http2_test(tls_session)
+add_http2_test(tls_connection)
 
 file(COPY test_server.crt test_server.key DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

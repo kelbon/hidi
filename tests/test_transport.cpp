@@ -233,7 +233,7 @@ static dd::task<void> accept_raw(boost::asio::ip::tcp::acceptor& a, ssl_context_
   REQUIRE(!ec);
   if (sslctx) {
     out.reset();
-    out = any_connection_t(std::in_place_type<asio_tls_connection>, std::move(sock), std::move(sslctx));
+    out = any_connection_t(std::in_place_type<tls_connection>, std::move(sock), std::move(sslctx));
   } else {
     out.reset();
     out = any_connection_t(std::in_place_type<asio_connection>, std::move(sock));
@@ -424,7 +424,7 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
   REQUIRE(r.ptr);
 
   if (tls)
-    check_rebinded<asio_tls_connection>(con, other, target);
+    check_rebinded<tls_connection>(con, other, target);
   else
     check_rebinded<asio_connection>(con, other, target);
   co_await peer.shutdown();
