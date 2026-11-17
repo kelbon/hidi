@@ -12,7 +12,7 @@ struct asio_timer::impl {
   std::optional<duration> period;
   timer_callback_t fn;
   bool armed = false;
-  // выставляется set_callback, см. `invoke`
+  // выставляется set_callback
   bool fn_replaced = false;
   // увеличивается при каждом arm. Отменённое ожидание завершается позже (operation_aborted), и если таймер
   // уже перевзведён, это завершение относится к старому взводу и должно игнорироваться

@@ -275,7 +275,6 @@ struct h2connection {
   //
   // если есть значение, кодировщик сообщит новый размер таблицы в начале следующего блока заголовков
   // Значение - наименьший SETTINGS_HEADER_TABLE_SIZE собеседника с последнего блока заголовков,
-  // см. start_headers_block
   std::optional<uint32_t> encodertablesizerequested;
   // правила для первого фрейма SETTINGS отличаются от правил для последующих
   bool first_settings_frame_received = false;

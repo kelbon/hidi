@@ -47,20 +47,20 @@ void apply_tcp_options(boost::asio::basic_socket<boost::asio::ip::tcp, E>& tcp_s
 
 namespace hidi {
 
-// см. tcp_connection_options::buffer_writes
 static any_connection_t make_tcp_connection(asio::ip::tcp::socket sock, const tcp_connection_options& opts,
                                             any_io_context_ref io) {
-  if (opts.buffer_writes)
-    return any_connection_t(std::in_place_type<buffered_connection<asio_connection>>, io, std::move(sock));
+  if (opts.write_buffer_limit)
+    return any_connection_t(std::in_place_type<buffered_connection<asio_connection>>, io,
+                            opts.write_buffer_limit, std::move(sock));
   else
     return any_connection_t(std::in_place_type<asio_connection>, std::move(sock));
 }
 
 static any_connection_t make_tls_connection(asio::ip::tcp::socket sock, ssl_context_ptr ctx,
                                             const tcp_connection_options& opts, any_io_context_ref io) {
-  if (opts.buffer_writes) {
-    return any_connection_t(std::in_place_type<buffered_connection<asio_tls_connection>>, io, std::move(sock),
-                            std::move(ctx));
+  if (opts.write_buffer_limit) {
+    return any_connection_t(std::in_place_type<buffered_connection<asio_tls_connection>>, io,
+                            opts.write_buffer_limit, std::move(sock), std::move(ctx));
   } else {
     return any_connection_t(std::in_place_type<asio_tls_connection>, std::move(sock), std::move(ctx));
   }
@@ -237,8 +237,10 @@ static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_soc
   namespace ssl = asio::ssl;
   any_connection_t res;
   asio_tls_connection& c = [&]() -> auto& {
-    if (opts.buffer_writes)
-      return res.emplace<buffered_connection<asio_tls_connection>>(io, std::move(tcp_sock), std::move(sslctx))
+    if (opts.write_buffer_limit)
+      return res
+          .emplace<buffered_connection<asio_tls_connection>>(io, opts.write_buffer_limit, std::move(tcp_sock),
+                                                             std::move(sslctx))
           .inner;
     else
       return res.emplace<asio_tls_connection>(std::move(tcp_sock), std::move(sslctx));
@@ -309,8 +311,7 @@ static dd::task<any_connection_t> do_create_connection_client(auto& self, remote
     throw network_exception("[TCP] cannot connect to {}, err: {}", ep.remote.to_string(), ec.message());
   if (self.starter)
     co_await self.starter(tcp_sock, deadline);
-  // таймер мог сработать во время starter и закрыть сокет. Таймаут TLS handshake - забота вызывающего (см.
-  // connection_i::handshake)
+  // таймер мог сработать во время starter и закрыть сокет. Таймаут TLS handshake - забота вызывающего
   if (timeoutflag)
     throw timeout_exception();
   apply_tcp_options(tcp_sock, opts);
