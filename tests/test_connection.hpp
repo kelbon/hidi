@@ -29,9 +29,6 @@ using namespace std::chrono_literals;
 namespace hidi {
 
 inline constexpr auto DEFAULT_CONN_TIMEOUT = std::chrono::seconds(10);
-// tcp_connection_options::write_buffer_limit в тестах с буферизацией записи
-inline constexpr size_t TEST_WRITE_BUFFER_LIMIT = 64 * 1024;
-
 // TLS контекст сервера с тестовым сертификатом (tests/test_server.crt)
 server_ssl_context_ptr test_server_ssl_ctx();
 
@@ -457,9 +454,8 @@ inline dd::job run_test(std::string_view testname, dd::task<void> test, bool& en
 }
 
 template <auto* Foo>
-void server_test_impl(std::string_view name, moko3::section_info* section, server_ssl_context_ptr ssl,
-                      bool buffer_writes) {
-  tcp_connection_options tcp{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
+void server_test_impl(std::string_view name, moko3::section_info* section, server_ssl_context_ptr ssl) {
+  tcp_connection_options tcp;
   echo_server server(ssl, h2server_options{.tcp = tcp});
   internet_address addr(asio::ip::address_v4::loopback(), /*port_num=*/0);
   addr = server.listen({.addr = addr, .reuse_address = true});
@@ -478,11 +474,9 @@ void server_test_impl(std::string_view name, moko3::section_info* section, serve
 template <typename Server>
 void run_custom_server_test(moko3::section_info* _section, std::string_view name, h2server_options opts,
                             dd::task<void> (*body)(Server&, internet_address, test_io)) {
-  auto run = [&](server_ssl_context_ptr ssl, bool buffer_writes) {
-    h2server_options server_opts = opts;
-    server_opts.tcp.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0;
-    Server server(ssl, server_opts);
-    test_io io{*&server.ioctx(), server_opts.tcp, ssl ? make_ssl_context_for_client({}) : nullptr, ssl};
+  auto run = [&](server_ssl_context_ptr ssl) {
+    Server server(ssl, opts);
+    test_io io{*&server.ioctx(), opts.tcp, ssl ? make_ssl_context_for_client({}) : nullptr, ssl};
     internet_address addr(asio::ip::address_v4::loopback(), 0);
     addr = server.listen({.addr = addr, .reuse_address = true});
     bool ended = false;
@@ -494,30 +488,19 @@ void run_custom_server_test(moko3::section_info* _section, std::string_view name
       std::rethrow_exception(std::move(ex));
   };
   SECTION("NO TLS") {
-    SECTION("direct writes") {
-      run(nullptr, false);
-    }
-    SECTION("buffered writes") {
-      run(nullptr, true);
-    }
+    run(nullptr);
   }
   SECTION("TLS") {
-    SECTION("direct writes") {
-      run(test_server_ssl_ctx(), false);
-    }
-    SECTION("buffered writes") {
-      run(test_server_ssl_ctx(), true);
-    }
+    run(test_server_ssl_ctx());
   }
 }
 
 // клиент и фейковый сервер работают на одном io_context. Тест получает io контекст сервера: на нём
 // fake_server_session создаёт acceptor (для TLS ему нужен серверный TLS контекст)
 template <auto* Foo>
-void client_test_impl(std::string_view name, moko3::section_info* toplvl_section, bool tls,
-                      bool buffer_writes) {
+void client_test_impl(std::string_view name, moko3::section_info* toplvl_section, bool tls) {
   asio::io_context rawio;
-  tcp_connection_options tcpopts{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
+  tcp_connection_options tcpopts;
   // клиент и фейковый сервер - на одном цикле событий
   any_io_context serverio = make_asio_io_context(rawio);
   hidi::h2client client(endpoint(asio::ip::address_v4::loopback()),
@@ -551,56 +534,35 @@ void transport_test_impl(std::string_view name, moko3::section_info* section) {
 
 // after this macro expected function scope, which will use `server`, `addr`, `ioctx`
 // and return dd::task<void>
-// тест прогоняется без TLS и с TLS (код может использовать is_tls_server), каждый вариант дважды: с
-// tcp_connection_options::write_buffer_limit и без
-#define SERVER_TEST(NAME)                                                                                  \
-  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,            \
-                                    ::hidi::test_io ioctx, ::moko3::section_info* _section,                \
-                                    bool is_tls_server);                                                   \
-  TEST(NAME) {                                                                                             \
-    SECTION("NO TLS", 0) {                                                                                 \
-      SECTION("direct writes", 2) {                                                                        \
-        ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, nullptr, false);                       \
-      }                                                                                                    \
-      SECTION("buffered writes", 3) {                                                                      \
-        ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, nullptr, true);                        \
-      }                                                                                                    \
-    }                                                                                                      \
-    SECTION("TLS", 1) {                                                                                    \
-      SECTION("direct writes", 4) {                                                                        \
-        ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, ::hidi::test_server_ssl_ctx(), false); \
-      }                                                                                                    \
-      SECTION("buffered writes", 5) {                                                                      \
-        ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, ::hidi::test_server_ssl_ctx(), true);  \
-      }                                                                                                    \
-    }                                                                                                      \
-  }                                                                                                        \
-  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,            \
-                                    ::hidi::test_io ioctx, ::moko3::section_info* _section,                \
+// тест прогоняется без TLS и с TLS (код может использовать is_tls_server)
+#define SERVER_TEST(NAME)                                                                         \
+  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,   \
+                                    ::hidi::test_io ioctx, ::moko3::section_info* _section,       \
+                                    bool is_tls_server);                                          \
+  TEST(NAME) {                                                                                    \
+    SECTION("NO TLS", 0) {                                                                        \
+      ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, nullptr);                       \
+    }                                                                                             \
+    SECTION("TLS", 1) {                                                                           \
+      ::hidi::server_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, ::hidi::test_server_ssl_ctx()); \
+    }                                                                                             \
+  }                                                                                               \
+  ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,   \
+                                    ::hidi::test_io ioctx, ::moko3::section_info* _section,       \
                                     bool is_tls_server)
 
 // after this macro expected function scope, which will use `client`, `ioctx`
 // and return dd::task<void>
-// тест прогоняется без TLS и с TLS, каждый вариант дважды: с tcp_connection_options::write_buffer_limit и без
+// тест прогоняется без TLS и с TLS
 #define CLIENT_TEST(NAME)                                                            \
   ::dd::task<void> UNIQUE_TEST_NAME(::hidi::h2client& client, ::hidi::test_io ioctx, \
                                     ::moko3::section_info* _section);                \
   TEST(NAME) {                                                                       \
     SECTION("NO TLS", 0) {                                                           \
-      SECTION("direct writes", 2) {                                                  \
-        ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, false, false);   \
-      }                                                                              \
-      SECTION("buffered writes", 3) {                                                \
-        ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, false, true);    \
-      }                                                                              \
+      ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, false);            \
     }                                                                                \
     SECTION("TLS", 1) {                                                              \
-      SECTION("direct writes", 4) {                                                  \
-        ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, true, false);    \
-      }                                                                              \
-      SECTION("buffered writes", 5) {                                                \
-        ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, true, true);     \
-      }                                                                              \
+      ::hidi::client_test_impl<&UNIQUE_TEST_NAME>(NAME, _section, true);             \
     }                                                                                \
   }                                                                                  \
   ::dd::task<void> UNIQUE_TEST_NAME(::hidi::h2client& client, ::hidi::test_io ioctx, \

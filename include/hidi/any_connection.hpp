@@ -53,8 +53,6 @@ anyany_method2_n(
     (&self, io_error_code& ec, bool is_client) requires(self.handshake(ec, is_client))->dd::task<void>);
 // static constexpr bool is_https в типе соединения
 anyany_pseudomethod(is_https_m, requires(Self::is_https)->bool);
-// Должно быть true если не каждая запись делает системный вызов (так что несколько мелких записей дешёвы)
-anyany_pseudomethod(is_buffered_m, requires(Self::is_buffered)->bool);
 
 struct rebind_result;
 
@@ -69,7 +67,7 @@ anyany_method_n(rebind_m, rebind,
 using any_connection_t =
     aa::basic_any_with_tags<aa::tags<aa::inline_vtable>, aa::default_allocator, /*SooS=*/0, try_read_m,
                             start_read_m, try_write_m, start_write_m, shutdown_m, handshake_m, is_https_m,
-                            is_buffered_m, rebind_m, aa::type_info>;
+                            rebind_m, aa::type_info>;
 
 // awaiters for using with .start_write / .start_read
 
