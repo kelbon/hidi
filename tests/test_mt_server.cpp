@@ -117,24 +117,14 @@ void run_on_clients(std::string_view name, asio::io_context& rawio, dd::task<voi
     std::rethrow_exception(std::move(ex));
 }
 
-// вызывает f(tls, buffer_writes) для каждого варианта транспорта
+// вызывает f(tls) без TLS и с TLS
 template <typename F>
 void for_each_transport(moko3::section_info* _section, F&& f) {
   SECTION("NO TLS") {
-    SECTION("direct writes") {
-      f(false, false);
-    }
-    SECTION("buffered writes") {
-      f(false, true);
-    }
+    f(false);
   }
   SECTION("TLS") {
-    SECTION("direct writes") {
-      f(true, false);
-    }
-    SECTION("buffered writes") {
-      f(true, true);
-    }
+    f(true);
   }
 }
 
@@ -204,8 +194,8 @@ dd::task<void> stop_during_requests(running_mt_server& srv, clients_t& clients, 
 // потоках, каждый на потоке своего сервера (после rebind соединение работает в контексте этого сервера)
 TEST("mt server serves connections on all threads") {
   const size_t threads = GENERATE(1, 2, 4);
-  for_each_transport(_section, [&](bool tls, bool buffer_writes) {
-    tcp_connection_options tcp{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
+  for_each_transport(_section, [&](bool tls) {
+    tcp_connection_options tcp;
     running_mt_server srv(threads, tls ? test_server_ssl_ctx() : nullptr, tcp);
     asio::io_context rawio;
     clients_t clients = make_clients(2 * threads, srv.addr, tls, tcp, rawio);
@@ -221,8 +211,8 @@ TEST("mt server serves connections on all threads") {
 // request_stop не прерывает начатые запросы ни на одном потоке, run завершается после их ответов
 TEST("mt server request_stop waits active requests") {
   const size_t threads = GENERATE(1, 2, 4);
-  for_each_transport(_section, [&](bool tls, bool buffer_writes) {
-    tcp_connection_options tcp{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
+  for_each_transport(_section, [&](bool tls) {
+    tcp_connection_options tcp;
     running_mt_server srv(threads, tls ? test_server_ssl_ctx() : nullptr, tcp);
     asio::io_context rawio;
     // по соединению на каждый поток

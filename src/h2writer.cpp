@@ -340,7 +340,7 @@ dd::job write_stream_data(stream_ptr node, h2connection_ptr con, writer_callback
       continue;
     HTTP2_LOG_TRACE(con->logctx, "sendind DATA part for stream {}, len: {}, stable: {}, end_stream: {}",
                     snode.streamid, part.data.size(), part.stable, part.end_stream);
-    if (part.stable && aa::invoke<is_buffered_m>(con->tcpcon)) {
+    if (part.stable) {
       co_await write_data</*Inplace=*/false>(snode, *con, part.data.data(),
                                              part.data.data() + part.data.size(),
                                              /*allow_end_stream=*/part.end_stream, ec);

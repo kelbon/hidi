@@ -15,9 +15,11 @@ struct tcp_connection_options {
   std::optional<uint32_t> receive_buffer_size = std::nullopt;
   // adds delay (waiting for new requests to merge them)
   bool merge_small_requests = false;
-  // > 0 запись в соединение буфферизуется. Значение - максимальный размер буфера
-  // = 0 без буфферизации, теоретически выгодно если очень большие тела
-  size_t write_buffer_limit = 0;
+  static constexpr size_t DEFAULT_WRITE_BUFFER_LIMIT = 64 * 1024;
+  // максимальный размер буфера
+  // запись в соединение всегда буферизуется (buffered_connection)
+  // значение 0 поставит размер по умолчанию
+  size_t write_buffer_limit = DEFAULT_WRITE_BUFFER_LIMIT;
   bool is_primal_connection = true;
   /*
     if unset, SSL host name verification disabled.

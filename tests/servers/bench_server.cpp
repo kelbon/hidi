@@ -7,8 +7,7 @@
 
 using namespace hidi;
 
-h2server_mt server(std::in_place_type<bench_server>, nullptr,
-                   h2server_options{.tcp = tcp_connection_options{.write_buffer_limit = 64 * 1024}});
+h2server_mt server(std::in_place_type<bench_server>, nullptr, h2server_options{});
 
 void on_ctrl_c(int) {
   server.request_stop();

@@ -25,41 +25,12 @@ struct single_read_assumption {
   ZAL_PIN;
 };
 
-struct single_writer_guarantee {
-  // boost::asio запрещает более одного async_write одновременно
-  // https://www.boost.org/doc/libs/latest/doc/html/boost_asio/reference/async_write/overload1.html
-  // поэтому для того чтобы send_ping не сломал большой запрос нужно создать очередь на отправку
-  bi::slist<writer_node, bi::cache_last<true>> writersqueue;
-  std::coroutine_handle<> writer;
-  bool allow_write = true;
-  ZAL_PIN;
-
-  single_writer_guarantee() = default;
-  // соединение может быть уничтожено без shutdown (например не удался TLS handshake), writer в этот момент
-  // ждёт работы и должен быть уничтожен
-  ~single_writer_guarantee() {
-    if (writer)
-      writer.destroy();
-  }
-
-  [[nodiscard]] bool writer_done() const noexcept {
-    // writer ожидает новой работы, но её никогда не будет
-    return !allow_write && writersqueue.empty() && writer != nullptr;
-  }
-
-  void notify_writer() {
-    if (writer)
-      std::exchange(writer, nullptr).resume();
-  }
-};
-
 }  // namespace noexport
 
-// any_connection
+// any_connection, используется всегда под buffered_connection
 struct asio_connection {
   asio::ip::tcp::socket sock;
   noexport::single_read_assumption readdata;
-  noexport::single_writer_guarantee writedata;
 
   explicit asio_connection(asio::ip::tcp::socket);
 
@@ -72,7 +43,6 @@ struct asio_connection {
     co_return;
   }
   static constexpr bool is_https = false;
-  static constexpr bool is_buffered = false;
   void rebind(void*, rebind_result&);
 };
 
@@ -143,12 +113,11 @@ struct asio_io : noexport::asio_io_holder, asio_ref_io {
   explicit asio_io(starter_t = {});
 };
 
-// any_connection
+// any_connection используется всегда под buffered_connection
 struct asio_tls_connection {
   noexport::single_read_assumption readdata;
   asio::ssl::stream<asio::ip::tcp::socket> sock;
   ssl_context_ptr sslctx;
-  noexport::single_writer_guarantee writedata;
 
   // precondition: ctx != nullptr
   explicit asio_tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx);
@@ -160,7 +129,6 @@ struct asio_tls_connection {
   dd::task<void> shutdown() noexcept;
   dd::task<void> handshake(io_error_code& ec, bool is_client);
   static constexpr bool is_https = true;
-  static constexpr bool is_buffered = false;
   void rebind(void*, rebind_result&);
 };
 
