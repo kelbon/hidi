@@ -13,7 +13,7 @@
 
 namespace hidi {
 
-// Запись с буферизацией (tcp_connection_options::buffer_writes) поверх любого соединения
+// Запись с буферизацией поверх любого соединения
 // try_write копирует данные в `outbuf` и сразу сообщает, что всё записано. Накопленное отправляет писатель
 // одной записью в конце такта, когда выполнятся все уже готовые задачи (например ответы на все запросы,
 // прочитанные за одно чтение). Это сильно уменьшает число системных вызовов при множестве мелких записей
@@ -22,14 +22,14 @@ namespace hidi {
 // Чтение, handshake и is_https передаются внутреннему соединению
 template <typename Inner>
 struct buffered_connection {
-  // если в outbuf OUTBUF_LIMIT байт и больше, try_write ничего не принимает и запись ждёт в `waiters`
-  static constexpr size_t OUTBUF_LIMIT = 64 * 1024;
   // сколько shutdown ждёт отправки принятого, если пир не читает
   static constexpr std::chrono::seconds DRAIN_TIMEOUT{1};
 
   using inner_connection_type = Inner;
 
   Inner inner;
+  // если в outbuf столько байт или больше, try_write ничего не принимает и запись ждёт в `waiters`
+  size_t outbuf_limit;
   // планирует отправку в конце такта и создаёт таймер для shutdown. Меняется при rebind
   any_io_context_ref io;
 
@@ -52,7 +52,9 @@ struct buffered_connection {
   ZAL_PIN;
 
   template <typename... Args>
-  buffered_connection(any_io_context_ref ctx, Args&&... args) : inner(std::forward<Args>(args)...), io(ctx) {
+  buffered_connection(any_io_context_ref ctx, size_t outbuf_limit, Args&&... args)
+      : inner(std::forward<Args>(args)...), outbuf_limit(outbuf_limit), io(ctx) {
+    assert(outbuf_limit > 0);
     (void)buffered_writer_job(this);
   }
   // соединение может быть уничтожено без shutdown (например не удался TLS handshake), писатель в этот момент
@@ -80,7 +82,7 @@ struct buffered_connection {
       return 0;
     }
     // пока кто-то ждёт места, новые данные встают за ним, чтобы не нарушить порядок
-    if (!waiters.empty() || outbuf.size() >= OUTBUF_LIMIT)
+    if (!waiters.empty() || outbuf.size() >= outbuf_limit)
       return 0;
     outbuf.insert(outbuf.end(), buf.begin(), buf.end());
     schedule_writer();
@@ -153,7 +155,6 @@ struct buffered_connection {
   }
 
  private:
-  // писатель засыпает, пока его не запланируют (см. `schedule_writer`)
   struct writer_idle_awaiter {
     buffered_connection* c = nullptr;
 
@@ -193,7 +194,7 @@ struct buffered_connection {
   // переносит данные ждущих места в outbuf, пока он не заполнится. Возвращает перенесённых, их надо разбудить
   static nodes_t move_waiters_to_outbuf(buffered_connection& c) {
     nodes_t moved;
-    while (!c.waiters.empty() && c.outbuf.size() < buffered_connection::OUTBUF_LIMIT) {
+    while (!c.waiters.empty() && c.outbuf.size() < c.outbuf_limit) {
       writer_node& n = c.waiters.front();
       c.waiters.pop_front();
       c.outbuf.insert(c.outbuf.end(), n.data.begin(), n.data.end());

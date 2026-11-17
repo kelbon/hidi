@@ -25,7 +25,7 @@ static dd::task<void> write_until_error(any_connection_t& con, io_error_code& ec
 TRANSPORT_TEST("shutdown does not wait for blocked write") {
   bool buffer_writes = GENERATE(false, true);
   any_io_context ioctx = make_asio_io_context(rawio);
-  tcp_connection_options opts{.buffer_writes = buffer_writes};
+  tcp_connection_options opts{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
   any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true, opts, nullptr);
   a.listen();
   any_connection_t peer =
@@ -421,7 +421,7 @@ TRANSPORT_TEST("connection stays non-blocking after rebind") {
   any_io_context ioctx = make_asio_io_context(rawio);
   any_io_context target = make_asio_io_context(other);
   any_acceptor a = ioctx.create_acceptor(localhost(), /*reuse_address=*/true,
-                                         tcp_connection_options{.buffer_writes = buffered},
+                                         tcp_connection_options{.write_buffer_limit = buffered ? TEST_WRITE_BUFFER_LIMIT : 0},
                                          tls ? test_server_ssl_ctx() : nullptr);
   a.listen();
   any_connection_t peer =

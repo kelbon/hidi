@@ -1,7 +1,5 @@
 #pragma once
 
-// общие части asio соединений: с буферизацией записи и без (см. tcp_connection_options::buffer_writes)
-
 #include "hidi/asio/io_impl.hpp"
 #include "hidi/asio/awaiters.hpp"
 
@@ -39,7 +37,7 @@ void rebind_tcp_executor(Connection& c, asio::io_context& new_ioctx) {
 // для соединения с `asio::ssl::stream<asio::ip::tcp::socket> sock` и `ssl_context_ptr sslctx`
 template <typename Connection>
 void rebind_tls_executor(Connection& c, asio::io_context& new_ioctx) {
-  // rebind делается до TLS handshake (см. connection_i::handshake), состояния TLS ещё нет, поэтому
+  // rebind делается до TLS handshake, состояния TLS ещё нет, поэтому
   // ssl::stream пересоздаётся целиком. Его внутренние таймеры (pending_read_ / pending_write_) создаются на
   // executor потока и при замене только сокета остались бы на старом io_context: ожидание одной операции TLS
   // другой (например чтение, которому нужно записать ответ на KeyUpdate, пока идёт запись) завершалось бы в

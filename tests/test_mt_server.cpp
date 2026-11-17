@@ -205,7 +205,7 @@ dd::task<void> stop_during_requests(running_mt_server& srv, clients_t& clients, 
 TEST("mt server serves connections on all threads") {
   const size_t threads = GENERATE(1, 2, 4);
   for_each_transport(_section, [&](bool tls, bool buffer_writes) {
-    tcp_connection_options tcp{.buffer_writes = buffer_writes};
+    tcp_connection_options tcp{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
     running_mt_server srv(threads, tls ? test_server_ssl_ctx() : nullptr, tcp);
     asio::io_context rawio;
     clients_t clients = make_clients(2 * threads, srv.addr, tls, tcp, rawio);
@@ -222,7 +222,7 @@ TEST("mt server serves connections on all threads") {
 TEST("mt server request_stop waits active requests") {
   const size_t threads = GENERATE(1, 2, 4);
   for_each_transport(_section, [&](bool tls, bool buffer_writes) {
-    tcp_connection_options tcp{.buffer_writes = buffer_writes};
+    tcp_connection_options tcp{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
     running_mt_server srv(threads, tls ? test_server_ssl_ctx() : nullptr, tcp);
     asio::io_context rawio;
     // по соединению на каждый поток

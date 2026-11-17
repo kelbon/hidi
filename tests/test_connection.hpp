@@ -29,6 +29,8 @@ using namespace std::chrono_literals;
 namespace hidi {
 
 inline constexpr auto DEFAULT_CONN_TIMEOUT = std::chrono::seconds(10);
+// tcp_connection_options::write_buffer_limit в тестах с буферизацией записи
+inline constexpr size_t TEST_WRITE_BUFFER_LIMIT = 64 * 1024;
 
 // TLS контекст сервера с тестовым сертификатом (tests/test_server.crt)
 server_ssl_context_ptr test_server_ssl_ctx();
@@ -113,7 +115,7 @@ struct test_h2connection {
   std::optional<uint32_t> m_headerTabSize;
   // local SETTINGS_MAX_CONCURRENT_STREAMS
   uint32_t m_maxConcurrentStreams = 0x7fffffff;
-  // принятые, но ещё не возвращённые через WINDOW_UPDATE байты (см. next_frame, answer_window_update)
+  // принятые, но ещё не возвращённые через WINDOW_UPDATE байты
   uint32_t m_unackedConnection = 0;
   std::unordered_map<stream_id_t, uint32_t> m_unackedStreams;
   // окно соединения, которое мы дали пиру (send_window_size_increment). DATA сверх него - ошибка пира
@@ -457,7 +459,7 @@ inline dd::job run_test(std::string_view testname, dd::task<void> test, bool& en
 template <auto* Foo>
 void server_test_impl(std::string_view name, moko3::section_info* section, server_ssl_context_ptr ssl,
                       bool buffer_writes) {
-  tcp_connection_options tcp{.buffer_writes = buffer_writes};
+  tcp_connection_options tcp{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
   echo_server server(ssl, h2server_options{.tcp = tcp});
   internet_address addr(asio::ip::address_v4::loopback(), /*port_num=*/0);
   addr = server.listen({.addr = addr, .reuse_address = true});
@@ -478,7 +480,7 @@ void run_custom_server_test(moko3::section_info* _section, std::string_view name
                             dd::task<void> (*body)(Server&, internet_address, test_io)) {
   auto run = [&](server_ssl_context_ptr ssl, bool buffer_writes) {
     h2server_options server_opts = opts;
-    server_opts.tcp.buffer_writes = buffer_writes;
+    server_opts.tcp.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0;
     Server server(ssl, server_opts);
     test_io io{*&server.ioctx(), server_opts.tcp, ssl ? make_ssl_context_for_client({}) : nullptr, ssl};
     internet_address addr(asio::ip::address_v4::loopback(), 0);
@@ -515,7 +517,7 @@ template <auto* Foo>
 void client_test_impl(std::string_view name, moko3::section_info* toplvl_section, bool tls,
                       bool buffer_writes) {
   asio::io_context rawio;
-  tcp_connection_options tcpopts{.buffer_writes = buffer_writes};
+  tcp_connection_options tcpopts{.write_buffer_limit = buffer_writes ? TEST_WRITE_BUFFER_LIMIT : 0};
   // клиент и фейковый сервер - на одном цикле событий
   any_io_context serverio = make_asio_io_context(rawio);
   hidi::h2client client(endpoint(asio::ip::address_v4::loopback()),
@@ -550,7 +552,7 @@ void transport_test_impl(std::string_view name, moko3::section_info* section) {
 // after this macro expected function scope, which will use `server`, `addr`, `ioctx`
 // and return dd::task<void>
 // тест прогоняется без TLS и с TLS (код может использовать is_tls_server), каждый вариант дважды: с
-// tcp_connection_options::buffer_writes и без
+// tcp_connection_options::write_buffer_limit и без
 #define SERVER_TEST(NAME)                                                                                  \
   ::dd::task<void> UNIQUE_TEST_NAME(::hidi::echo_server& server, ::hidi::internet_address addr,            \
                                     ::hidi::test_io ioctx, ::moko3::section_info* _section,                \
@@ -579,7 +581,7 @@ void transport_test_impl(std::string_view name, moko3::section_info* section) {
 
 // after this macro expected function scope, which will use `client`, `ioctx`
 // and return dd::task<void>
-// тест прогоняется без TLS и с TLS, каждый вариант дважды: с tcp_connection_options::buffer_writes и без
+// тест прогоняется без TLS и с TLS, каждый вариант дважды: с tcp_connection_options::write_buffer_limit и без
 #define CLIENT_TEST(NAME)                                                            \
   ::dd::task<void> UNIQUE_TEST_NAME(::hidi::h2client& client, ::hidi::test_io ioctx, \
                                     ::moko3::section_info* _section);                \

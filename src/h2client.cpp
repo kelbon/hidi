@@ -107,7 +107,7 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
   if (self->m_connection || !self->m_connectionGate.try_enter()) {
     // соединение без свободных stream id (в том числе после graceful GOAWAY) ещё может доживать активные
     // запросы, но новые стримы на нём открывать нельзя. Ожидающие не получают это соединение, их разбудит
-    // читатель, когда оно завершится: он переподключится (см. `connection_dropped`)
+    // читатель, когда оно завершится: он переподключится
     if (!self->m_connection || !self->m_connection->is_out_of_streamids())
       self->notify_connection_waiters(self->m_connection);
     co_return;

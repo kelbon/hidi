@@ -435,8 +435,8 @@ dd::job start_writer_for(h2connection_ptr con, writer_on_network_err_t neterrcb,
 
     while (!con->requests.empty()) {
       if constexpr (IS_CLIENT) {
-        // запрос ждёт слот, оставаясь в requests: так при таймауте он завершится без RST_STREAM (см.
-        // finish_request_by_timeout), а при разрыве соединения - в finish_all_with_reason
+        // запрос ждёт слот, оставаясь в requests: так при таймауте он завершится без RST_STREAM
+        // а при разрыве соединения - в finish_all_with_reason
         while (con->concurrent_streams_now() >= con->remote_settings.max_concurrent_streams) [[unlikely]] {
           HTTP2_LOG_TRACE(con->logctx, "too many streams, waiting (max is {})",
                           con->remote_settings.max_concurrent_streams);
