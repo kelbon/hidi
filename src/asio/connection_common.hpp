@@ -79,7 +79,7 @@ inline dd::job do_tls_read_some(auto& c, std::span<byte_t> userbuf, io_error_cod
                                 std::coroutine_handle<> callback) {
   single_read_assumption& rd = c.readdata;
   while (!userbuf.empty()) {
-    if (userbuf.size() >= rd.readen_capacity) {
+    if (userbuf.size() >= rd.readen.size()) {
       size_t n = co_await net.read_some(c.sock, userbuf, ec);
       if (ec) [[unlikely]]
         break;
@@ -90,10 +90,10 @@ inline dd::job do_tls_read_some(auto& c, std::span<byte_t> userbuf, io_error_cod
     if (ec) [[unlikely]]
       break;
     size_t copied = std::min(n, userbuf.size());
-    memcpy(userbuf.data(), rd.readen, copied);
+    memcpy(userbuf.data(), rd.readen.data(), copied);
     userbuf = userbuf.subspan(copied);
-    rd.readen_start = rd.readen + copied;
-    rd.readen_end = rd.readen + n;
+    rd.readen_start = rd.readen.data() + copied;
+    rd.readen_end = rd.readen.data() + n;
   }
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
@@ -103,7 +103,7 @@ inline void do_start_read(auto& self, std::coroutine_handle<> h, std::span<byte_
   size_t avail = self.readdata.readen_end - self.readdata.readen_start;
   assert(avail < buf.size());  // start_read must be invoked only if try_read failed
   memcpy(buf.data(), self.readdata.readen_start, avail);
-  self.readdata.readen_start = self.readdata.readen_end = self.readdata.readen;
+  self.readdata.readen_start = self.readdata.readen_end = self.readdata.readen.data();
   if constexpr (std::is_same_v<decltype(self.sock), asio::ssl::stream<asio::ip::tcp::socket>>)
     (void)do_tls_read_some(self, suffix(buf, buf.size() - avail), ec, h);
   else
