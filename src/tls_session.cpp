@@ -9,19 +9,15 @@
 
 namespace hidi {
 
-// у BIO чтения данные - tls_session*, чтение съедает начало его `unread`
-// у BIO записи данные - std::vector<byte_t>*, запись дописывает в его конец. nullptr - записанное не нужно
 struct tls_session::bio {
   static int read(BIO* b, char* buf, int len) {
     BIO_clear_retry_flags(b);
     tls_session& s = *static_cast<tls_session*>(BIO_get_data(b));
-    if (s.unread.empty()) {
+    if (s.raf.available_count() == 0) {
       BIO_set_retry_read(b);
       return -1;
     }
-    size_t n = std::min<size_t>(s.unread.size(), size_t(len));
-    std::memcpy(buf, s.unread.data(), n);
-    s.unread = s.unread.subspan(n);
+    size_t n = s.raf.read_some_r(std::span((byte_t*)buf, len));
     return int(n);
   }
 
@@ -45,14 +41,21 @@ struct tls_session::bio {
   }
 
   static BIO_METHOD* get() {
-    static BIO_METHOD* m = [] {
-      BIO_METHOD* r = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "hidi tls_session");
+    struct holder {
+      BIO_METHOD* m;
+
+      ~holder() {
+        BIO_meth_free(m);
+      }
+    };
+    static holder m = [] {
+      BIO_METHOD* r = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "name");
       if (!r || !BIO_meth_set_read(r, &read) || !BIO_meth_set_write(r, &write) ||
           !BIO_meth_set_ctrl(r, &ctrl))
         throw std::bad_alloc{};
-      return r;
+      return holder{r};
     }();
-    return m;
+    return m.m;
   }
 };
 
@@ -106,6 +109,7 @@ tls_session::tls_session(SSL_CTX* ctx) {
   BIO_set_init(rbio, 1);
   BIO_set_init(wbio, 1);
   BIO_set_data(rbio, this);
+  // забирает владение над rbio, wbio
   SSL_set_bio(ssl, rbio, wbio);
 }
 
@@ -114,15 +118,11 @@ tls_session::~tls_session() {
 }
 
 std::span<byte_t> tls_session::input() noexcept {
-  // несъеденное переносится в начало, место за ним - для нового
-  std::memmove(in, unread.data(), unread.size());
-  unread = std::span(in, unread.size());
-  return std::span(in).subspan(unread.size());
+  return raf.input();
 }
 
-void tls_session::commit(size_t n) noexcept {
-  assert(unread.data() == in && unread.size() + n <= sizeof(in));
-  unread = std::span(in, unread.size() + n);
+void tls_session::commit_readen_encrypted(size_t n) noexcept {
+  raf.commit_readen(n);
 }
 
 bool tls_session::handshake(std::vector<byte_t>& to_send, bool is_client, io_error_code& ec) {

@@ -375,7 +375,7 @@ TRANSPORT_TEST("tls_connection server reads data received with the end of handsh
         co_return;
       size_t n = co_await net.read_some(client_sock, client.input(), ec);
       REQUIRE(!ec);
-      client.commit(n);
+      client.commit_readen_encrypted(n);
     }
   };
   background client_task;

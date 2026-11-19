@@ -432,7 +432,7 @@ void parse_http2_request_headers(h2stream& s, std::span<const hpack::byte_t> byt
       throw stream_error(errc_e::PROTOCOL_ERROR, s.streamid, std::move(*err));
     }
     if (header.name == "content-type") {
-      if (contenttype_parsed)
+      if (contenttype_parsed)  // reuses pseudoheader msg
         throw duplicated_pseudoheader("content-type");
       contenttype_parsed = true;
       if (!s.use_bytes(header.value.str().size())) [[unlikely]]
