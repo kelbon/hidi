@@ -34,14 +34,10 @@ void rebind_tcp_executor(Connection& c, asio::io_context& new_ioctx) {
   c.sock = move_socket_to(c.sock, new_ioctx);
 }
 
-[[nodiscard]] inline bool do_try_read(single_read_assumption& rd, std::span<byte_t> buf) noexcept {
-  size_t avail = rd.readen_end - rd.readen_start;
-  bool b = avail >= buf.size();
-  if (b && !buf.empty()) {
-    memcpy(buf.data(), rd.readen_start, buf.size());
-    rd.readen_start += buf.size();
-  }
-  return b;
+[[nodiscard]] inline bool do_try_read(readahead_buffer& rd, std::span<byte_t> buf) noexcept {
+  if (rd.available_count() < buf.size())
+    return false;
+  return rd.read_some(buf).empty();  // заполнен весь буфер => true
 }
 
 inline dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& ec,
@@ -51,29 +47,26 @@ inline dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& e
   byte_t* const userbufend = userbuf.data() + userbufsz;
   while (readen < userbufsz) {
     readen += co_await net.read_some_many(c.sock, ec, std::span(userbuf.data() + readen, userbufend),
-                                          std::span(c.readdata.readen));
+                                          c.raf.input());
     if (ec) [[unlikely]]
       break;
   }
   // при ошибке может быть прочитано меньше userbufsz, тогда в readdata ничего не попало
   if (readen > userbufsz)
-    c.readdata.readen_end += readen - userbufsz;
+    c.raf.commit_readen(readen - userbufsz);
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
 
 // отдаёт в начало `buf` всё непрочитанное из `rd`, возвращает ещё не заполненную часть `buf`
 // pre: непрочитанного меньше buf.size() (try_read вернул false)
-inline std::span<byte_t> take_readen(single_read_assumption& rd, std::span<byte_t> buf) noexcept {
-  size_t avail = rd.readen_end - rd.readen_start;
-  assert(avail < buf.size());
-  memcpy(buf.data(), rd.readen_start, avail);
-  rd.readen_start = rd.readen_end = rd.readen.data();
-  return buf.subspan(avail);
+inline std::span<byte_t> take_readen(readahead_buffer& raf, std::span<byte_t> buf) noexcept {
+  assert(raf.available_count() < buf.size());  // try_read должен был дать false по контракту
+  return raf.read_some(buf);
 }
 
 inline void do_start_read(auto& self, std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
   // assumes only one reader at one time
-  (void)do_read_some(self, take_readen(self.readdata, buf), ec, h);
+  (void)do_read_some(self, take_readen(self.raf, buf), ec, h);
 }
 
 inline void close_tcp_sock(auto& tcp_sock) {

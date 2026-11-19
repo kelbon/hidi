@@ -2,6 +2,7 @@
 
 #include "hidi/errors.hpp"
 #include "hidi/utils/memory.hpp"
+#include "hidi/utils/readahead_buffer.hpp"
 
 #include <openssl/ssl.h>
 
@@ -10,13 +11,6 @@
 
 namespace hidi {
 
-// TLS одного соединения без ввода-вывода: превращает принятые от пира байты в открытый текст и открытый текст
-// в байты для отправки пиру. Используется в tls_connection
-//
-// Принятое от пира читается в input() и подтверждается commit. Сколько из него нужно сейчас, решают
-// handshake / decrypt, остальное ждёт в сессии следующих вызовов
-// Что отправить пиру, дописывается в конец `to_send`
-// Ошибки фатальны: после первой ошибки каждый следующий вызов тоже возвращает ошибку
 struct tls_session {
  private:
   // BIO, через который TLS библиотека читает `unread` и пишет в `to_send`
@@ -27,9 +21,8 @@ struct tls_session {
   static constexpr size_t MAX_RECORD_SIZE = (1 << 14) + 256 + 5;
 
   SSL* ssl = nullptr;
-  byte_t in[MAX_RECORD_SIZE];
-  // принятое, но ещё не прочитанное TLS библиотекой, внутри `in`
-  std::span<const byte_t> unread{in, 0};
+  // шифрованные данные полученные, но ещё не обработанные
+  readahead_buffer raf{MAX_RECORD_SIZE};
 
  public:
   // до handshake сессию можно настроить через native_handle (SNI, проверка сертификата)
@@ -39,11 +32,11 @@ struct tls_session {
   void operator=(tls_session&&) = delete;
   ~tls_session();
 
-  // куда читать принятое от пира. Сколько прочитано, сообщает commit
+  // куда читать принятое от пира. Сколько прочитано, сообщает commit_readen_encrypted
   // не пуст, если последний handshake / decrypt сообщил, что принятого не хватает
   [[nodiscard]] std::span<byte_t> input() noexcept;
   // в начало input() прочитано `n` байт
-  void commit(size_t n) noexcept;
+  void commit_readen_encrypted(size_t n) noexcept;
 
   // продвигает handshake на принятом, сообщения пиру дописывает в `to_send`
   // возвращает true, когда handshake завершён: то, что пир прислал после него, достанется decrypt

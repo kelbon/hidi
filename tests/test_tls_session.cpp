@@ -40,7 +40,7 @@ struct wire {
     std::span<byte_t> in = s.input();
     size_t n = std::min({max, in.size(), bytes.size() - fed});
     std::copy_n(bytes.begin() + fed, n, in.begin());
-    s.commit(n);
+    s.commit_readen_encrypted(n);
     fed += n;
   }
 };

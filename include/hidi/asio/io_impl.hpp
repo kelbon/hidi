@@ -6,6 +6,7 @@
 #include "hidi/tcp_connection_options.hpp"
 #include "hidi/tls_session.hpp"
 #include "hidi/utils/any_io_context.hpp"
+#include "hidi/utils/readahead_buffer.hpp"
 
 #include <boost/intrusive/slist.hpp>
 
@@ -17,21 +18,10 @@ namespace hidi {
 
 using starter_t = move_only_fn<dd::task<void>(boost::asio::ip::tcp::socket&, deadline_t) const>;
 
-namespace noexport {
-
-struct single_read_assumption {
-  std::vector<unsigned char> readen = std::vector<unsigned char>((1 << 14) + 9);
-  unsigned char* readen_start = readen.data();
-  unsigned char* readen_end = readen.data();
-  ZAL_PIN;
-};
-
-}  // namespace noexport
-
 // any_connection, используется всегда под buffered_connection
 struct asio_connection {
   asio::ip::tcp::socket sock;
-  noexport::single_read_assumption readdata;
+  readahead_buffer raf;
 
   explicit asio_connection(asio::ip::tcp::socket);
 
@@ -119,7 +109,7 @@ struct asio_io : noexport::asio_io_holder, asio_ref_io {
 struct tls_connection {
   asio::ip::tcp::socket sock;
   // расшифрованное, но ещё не отданное читателю
-  noexport::single_read_assumption readdata;
+  readahead_buffer raf;
   ssl_context_ptr sslctx;
   tls_session session;
   // шифротекст последней записи, хранится для переиспользования памяти

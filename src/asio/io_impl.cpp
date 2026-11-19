@@ -75,7 +75,8 @@ static void set_tls_read_error(io_error_code& ec) noexcept {
 // pre: c.readdata пуст, userbuf не пуст
 static dd::job tls_read(tls_connection& c, std::span<byte_t> userbuf, io_error_code& ec,
                         std::coroutine_handle<> callback) {
-  noexport::single_read_assumption& rd = c.readdata;
+  readahead_buffer& raf = c.raf;
+  assert(raf.available_count() == 0);
   for (;;) {
     // расшифровывает сразу в буфер читателя. Первый проход ещё ничего не прочитал из сокета, но в сессии
     // могло остаться принятое раньше (например сразу за handshake) или ошибка, отложенная прошлым чтением
@@ -84,7 +85,7 @@ static dd::job tls_read(tls_connection& c, std::span<byte_t> userbuf, io_error_c
       // остальное принятое (сколько поместится) - заранее в readdata, оттуда его отдаст try_read
       // ошибку здесь вернёт следующее чтение: она останется в сессии
       io_error_code ignored;
-      rd.readen_end = rd.readen_start + c.session.decrypt(rd.readen, ignored);
+      raf.commit_readen(c.session.decrypt(raf.input(), ignored));
       break;
     }
     if (ec)
@@ -94,18 +95,18 @@ static dd::job tls_read(tls_connection& c, std::span<byte_t> userbuf, io_error_c
       set_tls_read_error(ec);
       break;
     }
-    c.session.commit(n);
+    c.session.commit_readen_encrypted(n);
   }
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
 
 bool tls_connection::try_read(std::span<byte_t> buf) noexcept {
-  return noexport::do_try_read(readdata, buf);
+  return noexport::do_try_read(raf, buf);
 }
 
 void tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
   // assumes only one reader at one time
-  (void)tls_read(*this, noexport::take_readen(readdata, buf), ec, h);
+  (void)tls_read(*this, noexport::take_readen(raf, buf), ec, h);
 }
 
 size_t tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
@@ -166,7 +167,7 @@ dd::task<void> tls_connection::handshake(io_error_code& ec, bool is_client) {
       set_tls_read_error(ec);
       co_return;
     }
-    session.commit(n);
+    session.commit_readen_encrypted(n);
   }
 }
 
@@ -181,7 +182,7 @@ asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
 }
 
 bool asio_connection::try_read(std::span<byte_t> buf) noexcept {
-  return noexport::do_try_read(readdata, buf);
+  return noexport::do_try_read(raf, buf);
 }
 
 void asio_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf, io_error_code& ec) {
