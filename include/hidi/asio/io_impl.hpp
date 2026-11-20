@@ -25,7 +25,7 @@ struct asio_connection {
 
   explicit asio_connection(asio::ip::tcp::socket);
 
-  bool try_read(std::span<byte_t> buf) noexcept;
+  bool try_read(std::span<byte_t>& buf) noexcept;
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec);
   size_t try_write(std::span<const byte_t>, io_error_code&) noexcept;
   void start_write(writer_node*);
@@ -120,7 +120,7 @@ struct tls_connection {
   // precondition: ctx != nullptr
   explicit tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx);
 
-  bool try_read(std::span<byte_t>) noexcept;
+  bool try_read(std::span<byte_t>& buf) noexcept;
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec);
   // шифрует `buf` целиком одним вызовом и пишет в сокет сколько получится
   // возвращает buf.size(), если записано всё, иначе 0: по числу записанных байт шифротекста нельзя сказать,

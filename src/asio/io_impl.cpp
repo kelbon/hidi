@@ -100,7 +100,7 @@ static dd::job tls_read(tls_connection& c, std::span<byte_t> userbuf, io_error_c
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);
 }
 
-bool tls_connection::try_read(std::span<byte_t> buf) noexcept {
+bool tls_connection::try_read(std::span<byte_t>& buf) noexcept {
   return noexport::do_try_read(raf, buf);
 }
 
@@ -181,7 +181,7 @@ asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
   sock.non_blocking(true);
 }
 
-bool asio_connection::try_read(std::span<byte_t> buf) noexcept {
+bool asio_connection::try_read(std::span<byte_t>& buf) noexcept {
   return noexport::do_try_read(raf, buf);
 }
 

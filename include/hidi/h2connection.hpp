@@ -435,8 +435,11 @@ struct h2connection {
   auto write(std::span<const byte_t> bytes, io_error_code& ec) {
     return write_awaiter{tcpcon, ec, bytes};
   }
-  read_awaiter read(std::span<byte_t> buf, io_error_code& ec) {
+  read_awaiter read(std::span<byte_t>& buf, io_error_code& ec) {
     return read_awaiter{tcpcon, ec, buf};
+  }
+  read_into_awaiter read_into(std::span<byte_t> buf, io_error_code& ec) {
+    return read_into_awaiter(tcpcon, ec, buf);
   }
 
   // client side

@@ -533,7 +533,7 @@ dd::task<void> test_h2connection::receive_client_magic(std::source_location) {
   FAKE_HTTP2_LOG(INFO, "");
   byte_t buf[sizeof(CONNECTION_PREFACE)];
   io_error_code ec;
-  co_await con->read(buf, ec);
+  co_await con->read_into(buf, ec);
   REQUIRE(!ec);
   REQUIRE(memcmp(buf, CONNECTION_PREFACE, sizeof(CONNECTION_PREFACE)) == 0);
 }
@@ -569,7 +569,7 @@ dd::task<h2test_frame> test_h2connection::receive_frame(deadline_t d, std::sourc
     h2test_frame frame;
     std::array<byte_t, FRAME_HEADER_LEN> hdr;
     io_error_code ec;
-    co_await self.con->read(hdr, ec);
+    co_await self.con->read_into(hdr, ec);
     REQUIRE(!ec);
     frame.hdr = frame_header::parse(hdr);
 #ifdef HTTP2_ENABLE_TRACE
@@ -578,7 +578,7 @@ dd::task<h2test_frame> test_h2connection::receive_frame(deadline_t d, std::sourc
 #endif
     REQUIRE(frame.hdr.length <= self.m_maxFrameSize);
     frame.data.resize(frame.hdr.length);
-    co_await self.con->read(frame.data, ec);
+    co_await self.con->read_into(frame.data, ec);
     REQUIRE(!ec);
     if (frame.hdr.type == frame_e::DATA) {
       // https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.1 пир не должен превышать окно соединения
@@ -629,7 +629,7 @@ dd::task<void> test_h2connection::wait_connection_dropped(deadline_t deadline, s
   io_error_code ec;
   byte_t buf[512];
   while (!ec && !timedout)
-    co_await con->read(buf, ec);
+    co_await con->read_into(buf, ec);
   REQUIRE(!timedout);
 }
 
