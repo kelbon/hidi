@@ -66,11 +66,8 @@ if (HIDI_DEBUG_SSL_KEYS_FILE)
    target_compile_definitions(hidilib PRIVATE "HIDI_DEBUG_SSL_KEYS_FILE=${HIDI_DEBUG_SSL_KEYS_FILE}")
 endif()
 
-set_target_properties(hidilib PROPERTIES
-	CMAKE_CXX_EXTENSIONS OFF
-	LINKER_LANGUAGE CXX
-	CMAKE_CXX_STANDARD_REQUIRED ON
-	CXX_STANDARD 20)
+target_compile_features(hidilib PUBLIC cxx_std_20)
+set_target_properties(hidilib PROPERTIES CXX_EXTENSIONS OFF LINKER_LANGUAGE CXX)
 
 if (WIN32)
     if (NOT DEFINED HIDI_WINDOWS_VERSION) 

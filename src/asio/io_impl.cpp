@@ -114,33 +114,39 @@ void tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf
 
 size_t tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
   assert(unsent.empty());
-  sendbuf.clear();
-  session.encrypt(buf, sendbuf, ec);
+  // один буфер на все соединения, используется синхронно и только здесь
+  // за счёт этого меньше активная память и меньше кеш мисов
+  thread_local std::vector<byte_t> encrypted;
+  encrypted.clear();
+  session.encrypt(buf, encrypted, ec);
   if (ec)
     return 0;
   // в отличие от ssl::stream::write_some, который при заполненном сокете теряет остаток шифротекста,
-  // здесь остаток остаётся в sendbuf
-  size_t written = sock.write_some(asio::buffer(sendbuf), ec);
+  // здесь остаток сохраняется в unsent
+  size_t written = sock.write_some(asio::buffer(encrypted), ec);
   if (ec == asio::error::would_block)
     ec.clear();  // not a error
   if (ec)
     return 0;
-  if (written == sendbuf.size())
+  if (written == encrypted.size())
     return buf.size();
-  unsent = std::span<const byte_t>(sendbuf).subspan(written);
+  try {
+    unsent.assign(encrypted.begin() + written, encrypted.end());
+  } catch (...) {
+    ec = asio::error::no_memory;
+  }
   return 0;
 }
 
 void tls_connection::start_write(writer_node* n) {
   assert(n);
   assert(!unsent.empty());
-  asio::async_write(sock, asio::buffer(unsent.data(), unsent.size()),
-                    [this, n](const io_error_code& ec, size_t) {
-                      unsent = {};
-                      // 'ec' обрабатывает callback
-                      n->ec = ec;
-                      n->callback.resume();
-                    });
+  asio::async_write(sock, asio::buffer(unsent), [this, n](const io_error_code& ec, size_t) {
+    unsent.clear();
+    // 'ec' обрабатывает callback
+    n->ec = ec;
+    n->callback.resume();
+  });
 }
 
 dd::task<void> tls_connection::shutdown() noexcept {

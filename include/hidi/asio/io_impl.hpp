@@ -113,10 +113,8 @@ struct tls_connection {
   readahead_buffer raf;
   ssl_context_ptr sslctx;
   tls_session session;
-  // шифротекст последней записи, хранится для переиспользования памяти
-  std::vector<byte_t> sendbuf;
-  // часть sendbuf, которую try_write не смог записать в сокет сразу. Её дописывает start_write
-  std::span<const byte_t> unsent;
+  // шифротекст, который try_write не смог записать в сокет сразу. Его дописывает start_write
+  std::vector<byte_t> unsent;
 
   // precondition: ctx != nullptr
   explicit tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx,
