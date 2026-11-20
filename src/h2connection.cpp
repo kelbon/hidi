@@ -51,7 +51,7 @@ void intrusive_ptr_add_ref(h2stream* p) noexcept {
 void intrusive_ptr_release(h2stream* p) noexcept {
   --p->refcount;
   if (p->refcount == 0) {
-    p->connection->used_bytes -= p->used_bytes;
+    p->connection->used_bytes -= p->stream_used_bytes;
     p->connection->return_node(p);
   }
 }
@@ -566,7 +566,7 @@ stream_ptr h2connection::new_stream_node(http_request&& request, deadline_t dead
   node->responded = false;
   node->answered_before_data = false;
   node->end_stream_received = false;
-  node->used_bytes = 0;
+  node->stream_used_bytes = 0;
 
   assert(node->refcount == 1);
   assert(!node->requests_hook.is_linked());
@@ -705,18 +705,22 @@ dd::task<void> h2connection::receive_headers_with_continuation(h2frame frame, io
   frame.validate_streamid();
   frame.remove_padding();
   frame.ignore_deprecated_priority();
+  size_t used = 0;
+  on_scope_exit {
+    used_bytes -= used;
+  };
+  auto use_bytes = [&](size_t n) {
+    n += 64;  // пустые CONTINUATION тоже учитываются
+    if (used_bytes + n > used_bytes_limit)
+      throw protocol_error(errc_e::ENHANCE_YOUR_CALM, "memory limit exceeded while receiving CONTINUATION");
+    used_bytes += n;
+    used += n;
+  };
 
   frame_header startheader = frame.header;
+  use_bytes(frame.data.size());
   bytes_t bytes(frame.data.begin(), frame.data.end());
 
-  on_scope_failure(decode_anyway) {
-    try {
-      hpack::ignore_headers_block(decoder, bytes);
-    } catch (std::exception& e) {
-      // may be part of data only received, error expectable
-      HTTP2_LOG(logctx, WARN, "error while decoding CONTINUATIONS: {}", e.what());
-    }
-  };
   byte_t hdr[FRAME_HEADER_LEN];
   for (;;) {
     frame.data = hdr;
@@ -738,12 +742,7 @@ dd::task<void> h2connection::receive_headers_with_continuation(h2frame frame, io
                            std::format("expected CONTINUATION for stream {}, got {}", startheader.streamid,
                                        e2str(frame.header.type)));
     }
-    if (frame.header.length + bytes.size() > max_continuation_len) {
-      // protocol_error (GOAWAY), так как тело ещё не прочитано и читать мы его не хотим
-      // если соединение не отбросить данные будут недочитаны и чтение следующего заголовка сломается
-      throw protocol_error(errc_e::ENHANCE_YOUR_CALM,
-                           std::format("CONTINUATION too big, limit: {} bytes", max_continuation_len));
-    }
+    use_bytes(frame.header.length);
     // read frame data
     bytes.resize(bytes.size() + frame.header.length);
     co_await read_into(suffix(std::span(bytes), frame.header.length), ec);
@@ -751,12 +750,11 @@ dd::task<void> h2connection::receive_headers_with_continuation(h2frame frame, io
       co_return;
     if (frame.header.flags & flags::END_HEADERS) {
       // будто пришёл просто огромный HEADERS
-      static_assert(std::numeric_limits<uint32_t>::max() > MAX_CONTINUATION_LEN);
       frame.data = bytes;
       frame.header = startheader;
       frame.header.flags |= flags::END_HEADERS;
       frame.header.length = bytes.size();
-      decode_anyway.no_longer_needed();
+      used_bytes -= std::exchange(used, 0);
       whendone(frame);
       co_return;
     }

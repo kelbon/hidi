@@ -32,8 +32,6 @@ struct h2server_options {
   size_t limit_requests_memory_usage_bytes = size_t(-1);
   // При превышении лимита новые соединения будут отброшены
   size_t limit_clients_count = size_t(-1);
-  // cannot be > 1 GB
-  uint32_t max_continuation_len_bytes = uint32_t(-1);
   // Сколько кадров, отправляемых в ответ на кадры клиента (PING ACK, SETTINGS ACK, RST_STREAM,
   // WINDOW_UPDATE), может одновременно ждать записи. Если клиент шлёт такие кадры, но не читает ответы, они
   // копятся в памяти
@@ -57,8 +55,6 @@ struct h2server_options {
     o.max_concurrent_streams = 100;
     // тела и заголовки всех запросов одной сессии, которые собираются до вызова обработчика
     o.limit_requests_memory_usage_bytes = 16 * 1024 * 1024;
-    // блок заголовков целиком (HEADERS + CONTINUATION)
-    o.max_continuation_len_bytes = 64 * 1024;
     o.limit_clients_count = 10'000;
     o.max_pending_reply_frames = 1000;
     o.stream_window_size = 1024 * 1024;

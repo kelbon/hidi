@@ -128,9 +128,10 @@ SERVER_TEST("server sessions limit") {
   co_await client.wait_connection_dropped(deadline_after(1s));
 }
 
+// блок заголовков (HEADERS + CONTINUATION) учитывается в памяти сессии
 SERVER_TEST("server CONTINUATION limit") {
-  constexpr size_t LIMIT = 100;
-  server.get_options().max_continuation_len_bytes = LIMIT;
+  constexpr size_t LIMIT = 1000;
+  server.get_options().limit_requests_memory_usage_bytes = LIMIT;
   auto client = co_await fake_client_connection(ioctx, addr);
   co_await emulate_client_connection(client);
   constexpr size_t FIRST_CHUNK = 10;
@@ -153,12 +154,58 @@ SERVER_TEST("server CONTINUATION limit") {
     // блок заголовков стрима 1 отброшен, стрим не начат
     co_await client.receive_goaway(0, errc_e::ENHANCE_YOUR_CALM, ping_e::RESPONSE);
   }
-  SECTION("headers.size() == LIMIT") {
-    headers.resize(LIMIT - FIRST_CHUNK, 'a');
+  SECTION("underlimit") {
     co_await client.send_raw_continuation(1, headers, /*end_headers=*/true);
     // invalid headers block, but request accepted and parsed
     co_await client.receive_goaway(1, errc_e::COMPRESSION_ERROR, ping_e::RESPONSE);
   }
+}
+
+// блок заголовков ответа учитывается в limit_responses_memory_usage_bytes, превышение рвёт соединение
+CLIENT_TEST("client CONTINUATION limit") {
+  h2client_options opts = client.get_options();
+  opts.limit_responses_memory_usage_bytes = 1000;
+  client.set_options(std::move(opts));
+  auto server = co_await fake_server_session(ioctx, {localhost()}, client);
+  co_await emulate_server_connection(server);
+
+  http_request req;
+  req.method = http_method_e::GET;
+  req.path = "/abc";
+  req.scheme = scheme_e::HTTP;
+  req.authority = client.get_remote().to_string();
+  std::coroutine_handle handle =
+      client.send_request(std::move(req), deadline_after(5s)).start_and_detach(/*stop_at_end=*/true);
+  on_scope_exit {
+    handle.destroy();
+  };
+  (void)co_await server.receive_req();
+
+  std::vector<header> hdrs{
+      {":status", "200"},
+      {"x-customhdr", std::string(MIN_MAX_FRAME_LEN, 'A')},
+  };
+  co_await server.send_raw_hdr(1, server.encode_headers(hdrs), /*end_stream=*/true, /*split=*/true);
+  co_await wait_until([&] { return handle.done(); }, ioctx);
+  REQUIRE_THROWS(handle.promise().result_or_rethrow());
+}
+
+// пустые CONTINUATION тоже занимают память сессии, иначе их поток бесконечен
+SERVER_TEST("server empty CONTINUATION flood") {
+  constexpr size_t LIMIT = 1000;
+  server.get_options().limit_requests_memory_usage_bytes = LIMIT;
+  auto client = co_await fake_client_connection(ioctx, addr);
+  co_await emulate_client_connection(client);
+
+  h2test_frame f;
+  f.hdr.type = frame_e::HEADERS;
+  f.hdr.flags = flags::END_STREAM;  // без END_HEADERS
+  f.hdr.streamid = 1;
+  co_await client.send_frame(std::move(f));
+  // каждый кадр стоит хотя бы несколько байт, так что лимит кончается раньше
+  for (size_t i = 0; i < LIMIT; ++i)
+    co_await client.send_raw_continuation(1, {}, /*end_headers=*/false);
+  co_await client.receive_goaway(0, errc_e::ENHANCE_YOUR_CALM, ping_e::RESPONSE);
 }
 
 // отказ по max_concurrent_streams не должен ломать таблицу декодера сервера
