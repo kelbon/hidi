@@ -18,7 +18,7 @@ void apply_tcp_options(boost::asio::basic_socket<boost::asio::ip::tcp, E>& tcp_s
                        const hidi::tcp_connection_options& opts) try {
   using tcp = boost::asio::ip::tcp;
 
-  tcp_sock.set_option(tcp::no_delay(!opts.merge_small_requests));
+  tcp_sock.set_option(tcp::no_delay(true));
   if (opts.send_buffer_size)
     tcp_sock.set_option(boost::asio::socket_base::send_buffer_size(*opts.send_buffer_size));
   if (opts.receive_buffer_size)
@@ -40,13 +40,13 @@ static size_t write_buffer_limit(const tcp_connection_options& opts) {
 static any_connection_t make_tcp_connection(asio::ip::tcp::socket sock, const tcp_connection_options& opts,
                                             any_io_context_ref io) {
   return any_connection_t(std::in_place_type<buffered_connection<asio_connection>>, io,
-                          write_buffer_limit(opts), std::move(sock));
+                          write_buffer_limit(opts), std::move(sock), opts.read_buffer_limit);
 }
 
 static any_connection_t make_tls_connection(asio::ip::tcp::socket sock, ssl_context_ptr ctx,
                                             const tcp_connection_options& opts, any_io_context_ref io) {
   return any_connection_t(std::in_place_type<buffered_connection<tls_connection>>, io,
-                          write_buffer_limit(opts), std::move(sock), std::move(ctx));
+                          write_buffer_limit(opts), std::move(sock), std::move(ctx), opts.read_buffer_limit);
 }
 
 // pre: предыдущая запись завершена (у соединения один писатель)
@@ -59,8 +59,11 @@ static void do_start_write(auto& sock, writer_node* n) {
   });
 }
 
-tls_connection::tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx)
-    : sock(std::move(s)), sslctx(std::move(ctx)), session(sslctx->ctx.native_handle()) {
+tls_connection::tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx, size_t read_buffer_limit)
+    : sock(std::move(s)),
+      raf(readahead_buffer::DEFAULT_SIZE, read_buffer_limit),
+      sslctx(std::move(ctx)),
+      session(sslctx->ctx.native_handle(), read_buffer_limit) {
   sock.non_blocking(true);
 }
 
@@ -72,7 +75,7 @@ static void set_tls_read_error(io_error_code& ec) noexcept {
 }
 
 // заполняет `userbuf` расшифрованным. Пока его не хватает, читает из сокета
-// pre: c.readdata пуст, userbuf не пуст
+// pre: c.raf пуст, userbuf не пуст
 static dd::job tls_read(tls_connection& c, std::span<byte_t> userbuf, io_error_code& ec,
                         std::coroutine_handle<> callback) {
   readahead_buffer& raf = c.raf;
@@ -82,7 +85,7 @@ static dd::job tls_read(tls_connection& c, std::span<byte_t> userbuf, io_error_c
     // могло остаться принятое раньше (например сразу за handshake) или ошибка, отложенная прошлым чтением
     userbuf = userbuf.subspan(c.session.decrypt(userbuf, ec));
     if (userbuf.empty()) {
-      // остальное принятое (сколько поместится) - заранее в readdata, оттуда его отдаст try_read
+      // остальное принятое (сколько поместится) - заранее в raf, оттуда его отдаст try_read
       // ошибку здесь вернёт следующее чтение: она останется в сессии
       io_error_code ignored;
       raf.commit_readen(c.session.decrypt(raf.input(), ignored));
@@ -177,7 +180,8 @@ void tls_connection::rebind(void* p, rebind_result& r) {
   r.ptr = ctx;
 }
 
-asio_connection::asio_connection(asio::ip::tcp::socket s) : sock(std::move(s)) {
+asio_connection::asio_connection(asio::ip::tcp::socket s, size_t read_buffer_limit)
+    : sock(std::move(s)), raf(readahead_buffer::DEFAULT_SIZE, read_buffer_limit) {
   sock.non_blocking(true);
 }
 
@@ -218,9 +222,10 @@ static any_connection_t make_client_tls_connection(asio::ip::tcp::socket tcp_soc
                                                    const remote_and_local_endpoints& ep,
                                                    any_io_context_ref io) {
   any_connection_t res;
-  SSL* ssl = res.emplace<buffered_connection<tls_connection>>(io, write_buffer_limit(opts),
-                                                              std::move(tcp_sock), std::move(sslctx))
-                 .inner.session.native_handle();
+  SSL* ssl =
+      res.emplace<buffered_connection<tls_connection>>(io, write_buffer_limit(opts), std::move(tcp_sock),
+                                                       std::move(sslctx), opts.read_buffer_limit)
+          .inner.session.native_handle();
   if (const std::optional<std::string>& host = opts.host_for_name_verification) {
     // имя (или IP адрес) сверяется с сертификатом при проверке его цепочки
     X509_VERIFY_PARAM* param = SSL_get0_param(ssl);

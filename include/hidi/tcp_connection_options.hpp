@@ -13,13 +13,14 @@ struct tcp_connection_options {
   // (в Linux явно заданный размер отключает автоматическую подстройку буфера)
   std::optional<uint32_t> send_buffer_size = std::nullopt;
   std::optional<uint32_t> receive_buffer_size = std::nullopt;
-  // adds delay (waiting for new requests to merge them)
-  bool merge_small_requests = false;
   static constexpr size_t DEFAULT_WRITE_BUFFER_LIMIT = 64 * 1024;
   // максимальный размер буфера
   // запись в соединение всегда буферизуется (buffered_connection)
   // значение 0 поставит размер по умолчанию
   size_t write_buffer_limit = DEFAULT_WRITE_BUFFER_LIMIT;
+  static constexpr size_t DEFAULT_READ_BUFFER_LIMIT = 128 * 1024;
+  // больше буфер - меньше системных вызовов на больших входящих данных
+  size_t read_buffer_limit = DEFAULT_READ_BUFFER_LIMIT;
   bool is_primal_connection = true;
   /*
     if unset, SSL host name verification disabled.

@@ -32,13 +32,20 @@ struct readahead_buffer {
   }
 
  public:
+  // кадр HTTP/2 по умолчанию вместе с заголовком
+  static constexpr size_t DEFAULT_SIZE = (1 << 14) + 9;
+
   // pre: bufsz > 0
-  explicit readahead_buffer(size_t bufsz = (1 << 14) + 9) : readahead_buffer(bufsz, bufsz * 8) {
+  explicit readahead_buffer(size_t bufsz = DEFAULT_SIZE) : readahead_buffer(bufsz, bufsz * 8) {
   }
-  // pre: bufsz > 0, limit > bufsz
+  // растёт до `limit`, limit <= bufsz - не растёт
+  // pre: bufsz > 0
   explicit readahead_buffer(size_t bufsz, size_t limit)
-      : readen(bufsz), readen_start(readen.data()), readen_end(readen.data()), sz_limit(limit) {
-    assert(bufsz > 0 && limit > bufsz);
+      : readen(bufsz),
+        readen_start(readen.data()),
+        readen_end(readen.data()),
+        sz_limit(std::max(bufsz, limit)) {
+    assert(bufsz > 0);
   }
 
   readahead_buffer(readahead_buffer&&) = delete;

@@ -23,7 +23,8 @@ struct asio_connection {
   asio::ip::tcp::socket sock;
   readahead_buffer raf;
 
-  explicit asio_connection(asio::ip::tcp::socket);
+  explicit asio_connection(asio::ip::tcp::socket,
+                           size_t read_buffer_limit = tcp_connection_options::DEFAULT_READ_BUFFER_LIMIT);
 
   bool try_read(std::span<byte_t>& buf) noexcept;
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec);
@@ -118,7 +119,8 @@ struct tls_connection {
   std::span<const byte_t> unsent;
 
   // precondition: ctx != nullptr
-  explicit tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx);
+  explicit tls_connection(asio::ip::tcp::socket s, ssl_context_ptr ctx,
+                          size_t read_buffer_limit = tcp_connection_options::DEFAULT_READ_BUFFER_LIMIT);
 
   bool try_read(std::span<byte_t>& buf) noexcept;
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec);
