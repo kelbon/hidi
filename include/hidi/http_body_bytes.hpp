@@ -75,7 +75,13 @@ struct http_body_bytes : private std::vector<byte_t, detail::allocator_p9<byte_t
 
  public:
   using base_t::allocator_type;
+  using base_t::const_iterator;
+  using base_t::const_pointer;
+  using base_t::const_reference;
   using base_t::difference_type;
+  using base_t::iterator;
+  using base_t::pointer;
+  using base_t::reference;
   using base_t::size_type;
   using base_t::value_type;
 
