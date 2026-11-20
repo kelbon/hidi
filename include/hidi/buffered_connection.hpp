@@ -186,6 +186,14 @@ struct buffered_connection {
     }
   };
 
+  struct start_write_awaiter : write_awaiter<Inner> {
+    using write_awaiter<Inner>::write_awaiter;
+    // без try_write
+    bool await_ready() const noexcept {
+      return false;
+    }
+  };
+
   using nodes_t = bi::slist<writer_node, bi::cache_last<true>>;
 
   // переносит данные ждущих места в outbuf, пока он не заполнится. Возвращает перенесённых, их надо разбудить
@@ -233,10 +241,17 @@ struct buffered_connection {
         nodes_t moved = move_waiters_to_outbuf(*c);
         // перенесённые дописывают в outbuf (пока не заполнится), это уходит той же записью
         resume_all(moved);
-        std::swap(c->sendbuf, c->outbuf);
         io_error_code ec;
-        co_await write_awaiter(c->inner, ec, c->sendbuf);
-        c->sendbuf.clear();
+        size_t written = c->inner.try_write(c->outbuf, ec);
+        if (ec || written == c->outbuf.size()) {
+          // по возможности используем только один буфер
+          // чтобы уменьшить объём рабочей памяти и было меньше кеш мисов
+          c->outbuf.clear();
+        } else {
+          std::swap(c->sendbuf, c->outbuf);
+          co_await start_write_awaiter(c->inner, ec, std::span<const byte_t>(c->sendbuf).subspan(written));
+          c->sendbuf.clear();
+        }
         if (ec && !c->write_ec)
           c->write_ec = ec;
       }
