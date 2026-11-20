@@ -1,8 +1,10 @@
 #pragma once
 
-#include <vector>
-#include <span>
+#include <algorithm>
 #include <cassert>
+#include <cstring>
+#include <span>
+#include <vector>
 
 #include "hidi/utils/memory.hpp"
 
@@ -19,7 +21,12 @@ struct readahead_buffer {
     assert(readen.size() <= sz_limit);
     size_t b = readen_start - readen.data();
     size_t e = readen_end - readen.data();
-    readen.resize(std::min(readen.size() * 2, sz_limit));
+    try {
+      readen.resize(std::min(readen.size() * 2, sz_limit));
+    } catch (...) {
+      // не прокатило
+      return;
+    }
     readen_start = readen.data() + b;
     readen_end = readen.data() + e;
   }
@@ -33,6 +40,10 @@ struct readahead_buffer {
       : readen(bufsz), readen_start(readen.data()), readen_end(readen.data()), sz_limit(limit) {
     assert(bufsz > 0 && limit > bufsz);
   }
+
+  readahead_buffer(readahead_buffer&&) = delete;
+  void operator=(readahead_buffer&&) = delete;
+
   // уже прочитанное
   [[nodiscard]] std::span<const byte_t> available() const noexcept {
     return std::span(readen_start, readen_end);
