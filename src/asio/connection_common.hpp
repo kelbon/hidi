@@ -52,7 +52,7 @@ inline dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& e
     if (ec) [[unlikely]]
       break;
   }
-  // при ошибке может быть прочитано меньше userbufsz, тогда в readdata ничего не попало
+  // при ошибке может быть прочитано меньше userbufsz, тогда в raf ничего не попало
   if (readen > userbufsz)
     c.raf.commit_readen(readen - userbufsz);
   co_await dd::this_coro::destroy_and_transfer_control_to(callback);

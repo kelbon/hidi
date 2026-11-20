@@ -22,11 +22,12 @@ struct tls_session {
 
   SSL* ssl = nullptr;
   // шифрованные данные полученные, но ещё не обработанные
-  readahead_buffer raf{MAX_RECORD_SIZE};
+  readahead_buffer raf;
 
  public:
   // до handshake сессию можно настроить через native_handle (SNI, проверка сертификата)
-  explicit tls_session(SSL_CTX* ctx);
+  // `input_limit` - до какого размера растёт буфер принятого
+  explicit tls_session(SSL_CTX* ctx, size_t input_limit = MAX_RECORD_SIZE);
 
   tls_session(tls_session&&) = delete;
   void operator=(tls_session&&) = delete;

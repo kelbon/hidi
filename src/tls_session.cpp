@@ -91,7 +91,7 @@ void set_error(SSL* ssl, int r, io_error_code& ec) {
 
 }  // namespace
 
-tls_session::tls_session(SSL_CTX* ctx) {
+tls_session::tls_session(SSL_CTX* ctx, size_t input_limit) : raf(MAX_RECORD_SIZE, input_limit) {
   ssl = SSL_new(ctx);
   BIO* rbio = BIO_new(bio::get());
   BIO* wbio = BIO_new(bio::get());
