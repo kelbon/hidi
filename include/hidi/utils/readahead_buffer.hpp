@@ -13,14 +13,26 @@ struct readahead_buffer {
   std::vector<byte_t> readen;
   byte_t* readen_start;
   byte_t* readen_end;
-  // TODO grow
- public:
-  // pre: bufsz > 0
-  explicit readahead_buffer(size_t bufsz = (1 << 14) + 9)
-      : readen(bufsz), readen_start(readen.data()), readen_end(readen.data()) {
-    assert(bufsz > 0);
+  size_t sz_limit;
+
+  void grow() noexcept {
+    assert(readen.size() <= sz_limit);
+    size_t b = readen_start - readen.data();
+    size_t e = readen_end - readen.data();
+    readen.resize(std::min(readen.size() * 2, sz_limit));
+    readen_start = readen.data() + b;
+    readen_end = readen.data() + e;
   }
 
+ public:
+  // pre: bufsz > 0
+  explicit readahead_buffer(size_t bufsz = (1 << 14) + 9) : readahead_buffer(bufsz, bufsz * 8) {
+  }
+  // pre: bufsz > 0, limit > bufsz
+  explicit readahead_buffer(size_t bufsz, size_t limit)
+      : readen(bufsz), readen_start(readen.data()), readen_end(readen.data()), sz_limit(limit) {
+    assert(bufsz > 0 && limit > bufsz);
+  }
   // уже прочитанное
   [[nodiscard]] std::span<const byte_t> available() const noexcept {
     return std::span(readen_start, readen_end);
@@ -60,7 +72,8 @@ struct readahead_buffer {
   void commit_readen(size_t n) {
     assert(((readen.data() + readen.size()) - readen_end) >= n);
     readen_end += n;
-    // TODO? если забил лимит, то увеличивать буфер?
+    if (available_count() == readen.size())
+      grow();  // только растём
   }
 };
 

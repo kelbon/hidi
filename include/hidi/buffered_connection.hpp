@@ -81,6 +81,7 @@ struct buffered_connection {
     // пока кто-то ждёт места, новые данные встают за ним, чтобы не нарушить порядок
     if (!waiters.empty() || outbuf.size() >= outbuf_limit)
       return 0;
+    // TODO? если гигантская запись идти сразу в start_write без мемкпи
     outbuf.insert(outbuf.end(), buf.begin(), buf.end());
     schedule_writer();
     return buf.size();

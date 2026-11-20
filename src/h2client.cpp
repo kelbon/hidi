@@ -291,6 +291,7 @@ dd::job h2client::start_reader_for(h2client* self, h2connection_ptr c) {
       // read frame header
 
       frame.data = buffer.get_exactly(FRAME_HEADER_LEN);
+      // TODO? хм, если спан по ссылке передавать....
 
       co_await con.read(frame.data, ec);
 
