@@ -279,7 +279,7 @@ TRANSPORT_TEST("write under backpressure") {
   std::vector<byte_t> chunk(BACKPRESSURE_CHUNK);
   io_error_code ec;
   for (size_t c = 0; c < BACKPRESSURE_CHUNKS; ++c) {
-    co_await read_awaiter(reader, ec, chunk);
+    co_await read_into_awaiter(reader, ec, chunk);
     REQUIRE(!ec);
     for (size_t i = 0; i < chunk.size(); ++i)
       REQUIRE(chunk[i] == pattern_byte(c * BACKPRESSURE_CHUNK + i));

@@ -58,6 +58,13 @@ struct readahead_buffer {
     readen_start += sz;
     return sz;
   }
+  // отдаёт `n` доступных байт без копирования, действительны до следующего input()
+  [[nodiscard]] std::span<byte_t> take(size_t n) noexcept {
+    assert(n <= available_count());
+    std::span<byte_t> r(readen_start, n);
+    readen_start += n;
+    return r;
+  }
   // передаёт доступные байты в буфер и возвращает незаполненную часть буфера
   std::span<byte_t> read_some(std::span<byte_t> buf) noexcept {
     return buf.subspan(read_some_r(buf));

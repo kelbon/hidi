@@ -63,7 +63,7 @@ struct buffered_connection {
       writer.destroy();
   }
 
-  bool try_read(std::span<byte_t> buf) noexcept {
+  bool try_read(std::span<byte_t>& buf) noexcept {
     return inner.try_read(buf);
   }
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec) {

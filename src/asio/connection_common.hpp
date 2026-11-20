@@ -34,10 +34,11 @@ void rebind_tcp_executor(Connection& c, asio::io_context& new_ioctx) {
   c.sock = move_socket_to(c.sock, new_ioctx);
 }
 
-[[nodiscard]] inline bool do_try_read(readahead_buffer& rd, std::span<byte_t> buf) noexcept {
+[[nodiscard]] inline bool do_try_read(readahead_buffer& rd, std::span<byte_t>& buf) noexcept {
   if (rd.available_count() < buf.size())
     return false;
-  return rd.read_some(buf).empty();  // заполнен весь буфер => true
+  buf = rd.take(buf.size());
+  return true;
 }
 
 inline dd::job do_read_some(auto& c, std::span<byte_t> userbuf, io_error_code& ec,

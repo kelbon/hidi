@@ -202,7 +202,7 @@ struct side {
   // читает ровно bytes.size()
   dd::task<void> read(std::span<byte_t> bytes, io_error_code& ec) {
     if (ours)
-      co_await read_awaiter(*ours, ec, bytes);
+      co_await read_into_awaiter(*ours, ec, bytes);
     else
       co_await net.read(*peer, bytes, ec);
   }
@@ -386,7 +386,7 @@ TRANSPORT_TEST("tls_connection server reads data received with the end of handsh
   REQUIRE(!ec);
   co_await client_task.join(ioctx);
   std::vector<byte_t> received(data.size());
-  co_await read_awaiter(server, ec, received);
+  co_await read_into_awaiter(server, ec, received);
   REQUIRE(!ec);
   REQUIRE((received == data));
   co_await server.shutdown();

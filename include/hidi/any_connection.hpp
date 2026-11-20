@@ -27,8 +27,8 @@ struct writer_node : bi::slist_base_hook<> {
 };
 
 // returns false if not enough bytes available
-// TODO? ссылка?
-anyany_method2_n(try_read_m, try_read, (&self, std::span<byte_t> buf) requires(self.try_read(buf))->bool);
+// may replace `buf` with connection memory instead of copying, must be valid until next read
+anyany_method2_n(try_read_m, try_read, (&self, std::span<byte_t>& buf) requires(self.try_read(buf))->bool);
 // pre: try_read returns false!
 anyany_method2_n(start_read_m, start_read,
                  (&self, std::coroutine_handle<> callback, std::span<byte_t> buf,
@@ -75,7 +75,7 @@ using any_connection_t =
 struct read_awaiter {
   any_connection_t& con;
   io_error_code& ec;
-  std::span<byte_t> buf;  // TODO? ссылка?
+  std::span<byte_t>& buf;
 
   bool await_ready() noexcept {
     // использование try_read экономит suspend корутины
@@ -91,6 +91,31 @@ struct read_awaiter {
     con.start_read(h, buf, ec);
   }
   static void await_resume() noexcept {
+  }
+};
+
+// read_awaiter, после которого прочитанное всегда в `buf`
+struct read_into_awaiter {
+  std::span<byte_t> buf;
+  std::span<byte_t> got;
+  read_awaiter reader;
+
+  read_into_awaiter(any_connection_t& con, io_error_code& ec, std::span<byte_t> b) noexcept
+      : buf(b), got(b), reader{con, ec, got} {
+  }
+
+  read_into_awaiter(read_into_awaiter&&) = delete;
+  void operator=(read_into_awaiter&&) = delete;
+
+  bool await_ready() noexcept {
+    return reader.await_ready();
+  }
+  void await_suspend(std::coroutine_handle<> h) const {
+    reader.await_suspend(h);
+  }
+  void await_resume() noexcept {
+    if (got.data() != buf.data())
+      std::memcpy(buf.data(), got.data(), got.size());
   }
 };
 

@@ -721,7 +721,7 @@ dd::task<void> h2connection::receive_headers_with_continuation(h2frame frame, io
   for (;;) {
     frame.data = hdr;
 
-    co_await read(hdr, ec);
+    co_await read_into(hdr, ec);
 
     if (ec || is_dropped())
       co_return;
@@ -746,7 +746,7 @@ dd::task<void> h2connection::receive_headers_with_continuation(h2frame frame, io
     }
     // read frame data
     bytes.resize(bytes.size() + frame.header.length);
-    co_await read(suffix(std::span(bytes), frame.header.length), ec);
+    co_await read_into(suffix(std::span(bytes), frame.header.length), ec);
     if (ec || is_dropped())
       co_return;
     if (frame.header.flags & flags::END_HEADERS) {

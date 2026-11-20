@@ -101,7 +101,7 @@ dd::task<h2connection_ptr> establish_http2_session_client(h2connection_ptr con, 
   // So order MUST BE settings (NOT ACK) + settings (ACK)
 
   byte_t buf[H2FHL];
-  co_await con->read(std::span(buf, H2FHL), ec);
+  co_await con->read_into(buf, ec);
 
   if (ec) {
     HTTP2_LOG(con->logctx, ERROR, "cannot read HTTP/2 server preface, {}", ec.message());
@@ -113,7 +113,7 @@ dd::task<h2connection_ptr> establish_http2_session_client(h2connection_ptr con, 
   validate_first_server_frame_header(header, con->logctx);
 
   bytes_t bytes(header.length);
-  co_await con->read(bytes, ec);
+  co_await con->read_into(bytes, ec);
   if (ec) {
     HTTP2_LOG(con->logctx, ERROR, "cannot read accepted settings frame from server");
     throw network_exception(ec);
@@ -161,7 +161,7 @@ dd::task<h2connection_ptr> establish_http2_session_server(h2connection_ptr con, 
   reusable_buffer buf;
   {  // read client magic
     std::span magic = buf.get_exactly(MAGIC_SZ);
-    co_await con->read(magic, ec);
+    co_await con->read_into(magic, ec);
     if (ec) {
       HTTP2_LOG(con->logctx, ERROR, "client session establishment failed: reading preface, err: {}",
                 ec.message());
@@ -172,7 +172,7 @@ dd::task<h2connection_ptr> establish_http2_session_server(h2connection_ptr con, 
   frame_header settingsheader;
   {  // read settings frame
     std::span settingsframe = buf.get_exactly(FRAME_HEADER_LEN);
-    co_await con->read(settingsframe, ec);
+    co_await con->read_into(settingsframe, ec);
     if (ec) {
       HTTP2_LOG(con->logctx, ERROR,
                 "client session establishment failed: reading client settings header, err: {}", ec.message());
@@ -185,7 +185,7 @@ dd::task<h2connection_ptr> establish_http2_session_server(h2connection_ptr con, 
 
   {  // read settings data
     std::span settingsdata = buf.get_exactly(settingsheader.length);
-    co_await con->read(settingsdata, ec);
+    co_await con->read_into(settingsdata, ec);
     if (ec) {
       HTTP2_LOG(con->logctx, ERROR,
                 "client session establishment failed: reading client settings data, err: {}", ec.message());
