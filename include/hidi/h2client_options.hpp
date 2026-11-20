@@ -26,8 +26,7 @@ struct h2client_options {
   // can significantly speed up the first requests on connection,
   // but not all servers correctly support it
   bool allow_requests_before_server_settings = true;
-  // cannot be > 1 GB
-  uint32_t max_continuation_len_bytes = uint32_t(-1);
+  size_t limit_responses_memory_usage_bytes = size_t(-1);
   // Сколько кадров, отправляемых в ответ на кадры сервера (PING ACK, SETTINGS ACK, RST_STREAM,
   // WINDOW_UPDATE), может одновременно ждать записи. Если сервер шлёт такие кадры, но не читает ответы, они
   // копятся в памяти

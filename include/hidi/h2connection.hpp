@@ -130,7 +130,7 @@ struct h2stream {
   // filled if this a streaming request
   stream_body_maker_t makebody;
   // ignored for server streaming nodes (websocket etc, exchanging bytes)
-  size_t used_bytes = 0;  // used only by server
+  size_t stream_used_bytes = 0;
   // Note: УЗЛЫ ПЕРЕИСПОЛЬЗУЮТСЯ! Добавляешь поле? Посмотри на `h2connection::new_stream_node`!!!
   ZAL_PIN;
 
@@ -312,10 +312,9 @@ struct h2connection {
   bi::slist<h2stream, requests_member_hook_t, bi::constant_time_size<true>> free_nodes;
   log_context logctx;
   any_io_context_ref ioctx;
-  // for supporting h2server_options::limit_requests_memory_usage_bytes
+  // для поддержки limit_responses/limit_requests_memory_usage_bytes
   size_t used_bytes = 0;
   size_t used_bytes_limit = size_t(-1);
-  uint32_t max_continuation_len = uint32_t(-1);
   // число ещё не записанных PING ACK, SETTINGS ACK, RST_STREAM, WINDOW_UPDATE
   // Если пир шлёт кадры, требующие ответа, но не читает ответы, они копятся бесконечно
   uint32_t pending_reply_frames = 0;
@@ -674,6 +673,7 @@ struct h2connection {
 
   // collects HEADERS from many CONTINUATIONS and first HEADERS frame without END_HEADERS and passes it into
   // `when_done` invokes `oneachframe` when receives new frame header
+  // исключения из этой функции должны приводить к завершению соединения
   dd::task<void> receive_headers_with_continuation(h2frame frame, io_error_code& ec,
                                                    move_only_fn<void()> oneachframe,
                                                    move_only_fn<void(h2frame)> whendone);
@@ -688,7 +688,7 @@ inline bool h2stream::use_bytes(size_t n) noexcept {
   if (connection->used_bytes + n > connection->used_bytes_limit) [[unlikely]]
     return false;
   connection->used_bytes += n;
-  used_bytes += n;
+  stream_used_bytes += n;
   return true;
 }
 

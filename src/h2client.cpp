@@ -175,8 +175,7 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
     assert(new_connection);
 
     new_connection->writer.handle = nullptr;
-    assert(self->m_options.max_continuation_len_bytes <= MAX_CONTINUATION_LEN);
-    new_connection->max_continuation_len = self->m_options.max_continuation_len_bytes;
+    new_connection->used_bytes_limit = self->m_options.limit_responses_memory_usage_bytes;
     new_connection->max_pending_reply_frames = self->m_options.max_pending_reply_frames;
 
     if (self->m_options.ping_interval != duration_t::max()) {
@@ -423,7 +422,6 @@ h2client::h2client(endpoint remote, client_ssl_context_ptr ssl, h2client_options
   assert(m_ioctx);
   m_options.logctx.name.set_prefix(CLIENT_PREFIX);
   m_options.max_receive_frame_size = std::min(FRAME_LEN_MAX, m_options.max_receive_frame_size);
-  m_options.max_continuation_len_bytes = std::min(m_options.max_continuation_len_bytes, MAX_CONTINUATION_LEN);
   HTTP2_LOG_TRACE(logctx(), "h2client created");
 }
 

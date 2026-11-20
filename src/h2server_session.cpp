@@ -69,8 +69,6 @@ h2server_session::h2server_session(h2connection_ptr con, h2server_options opts, 
   assert(connection);
   connection->used_bytes_limit = options.limit_requests_memory_usage_bytes;
   options.max_receive_frame_size = std::min(FRAME_LEN_MAX, options.max_receive_frame_size);
-  options.max_continuation_len_bytes = std::min(options.max_continuation_len_bytes, MAX_CONTINUATION_LEN);
-  connection->max_continuation_len = options.max_continuation_len_bytes;
   connection->max_pending_reply_frames = options.max_pending_reply_frames;
 }
 

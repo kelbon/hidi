@@ -71,8 +71,6 @@ constexpr inline uint32_t FRAME_LEN_MAX = (uint32_t(1) << 24) - 1;
 //
 // values less than 16'384 explicitly forbidden
 constexpr inline uint32_t MIN_MAX_FRAME_LEN = 16'384;
-// not protocol, but implementation limit
-constexpr inline uint32_t MAX_CONTINUATION_LEN = 1024 * 1024 * 1024;  // 1 GB
 
 using flags_t = uint8_t;
 
