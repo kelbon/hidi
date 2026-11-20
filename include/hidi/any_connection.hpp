@@ -27,6 +27,7 @@ struct writer_node : bi::slist_base_hook<> {
 };
 
 // returns false if not enough bytes available
+// TODO? ссылка?
 anyany_method2_n(try_read_m, try_read, (&self, std::span<byte_t> buf) requires(self.try_read(buf))->bool);
 // pre: try_read returns false!
 anyany_method2_n(start_read_m, start_read,
@@ -74,7 +75,7 @@ using any_connection_t =
 struct read_awaiter {
   any_connection_t& con;
   io_error_code& ec;
-  std::span<byte_t> buf;
+  std::span<byte_t> buf;  // TODO? ссылка?
 
   bool await_ready() noexcept {
     // использование try_read экономит suspend корутины
