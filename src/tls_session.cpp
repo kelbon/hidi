@@ -41,21 +41,16 @@ struct tls_session::bio {
   }
 
   static BIO_METHOD* get() {
-    struct holder {
-      BIO_METHOD* m;
-
-      ~holder() {
-        BIO_meth_free(m);
-      }
-    };
-    static holder m = [] {
+    // никто не вызывает BIO_meth_free - SSL сессии хер знает как держат `m`,
+    // а "утечку" статического объекта даже асан игнорирует
+    static BIO_METHOD* m = [] {
       BIO_METHOD* r = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "name");
       if (!r || !BIO_meth_set_read(r, &read) || !BIO_meth_set_write(r, &write) ||
           !BIO_meth_set_ctrl(r, &ctrl))
         throw std::bad_alloc{};
-      return holder{r};
+      return r;
     }();
-    return m.m;
+    return m;
   }
 };
 
