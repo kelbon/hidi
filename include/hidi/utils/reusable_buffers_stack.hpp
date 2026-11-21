@@ -26,7 +26,7 @@ struct reusable_buffers_stack {
   }
 
   void return_buffer(std::vector<byte_t> b) noexcept {
-    if (bufs.size() == max_count)
+    if (bufs.size() == max_count || b.capacity() >= 256 * 1024)
       return;
     b.clear();
     // исключение невозможно т.к. в конструкторе был reserve
