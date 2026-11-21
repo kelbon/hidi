@@ -36,6 +36,8 @@ struct scripted_inner {
   std::coroutine_handle<> pending_read;
   io_error_code* read_ec = nullptr;
   bool shut = false;
+  // внутреннее соединение сообщило об ошибке записи, после неё писать нельзя
+  bool failed = false;
   std::string violation;
 
   void check(bool ok, const char* what) {
@@ -55,8 +57,10 @@ struct scripted_inner {
     check(!must_start_write, "try_write after partial try_write");
     check(!pending_write, "try_write during start_write");
     check(!shut, "try_write after shutdown");
+    check(!failed, "try_write after write error");
     check(buf.size() < max_write_size, "outbuf exceeds limit");
     if (fail_now()) {
+      failed = true;
       ec = error::broken_pipe;
       return 0;
     }
@@ -72,6 +76,7 @@ struct scripted_inner {
   void start_write(writer_node* n) {
     check(must_start_write, "start_write without partial try_write");
     check(!pending_write, "two start_write");
+    check(!failed, "start_write after write error");
     must_start_write = false;
     pending_write = n;
   }
@@ -248,6 +253,7 @@ TEST("buffered_connection: random reads, writes, shutdown and errors") {
       case COMPLETE_WRITE: {
         writer_node* n = std::exchange(inner.pending_write, nullptr);
         if (inner.fail_now()) {
+          inner.failed = true;
           n->ec = error::broken_pipe;
         } else {
           std::span<const byte_t> rest = inner.tls_like ? std::span<const byte_t>(inner.unsent) : n->data;
