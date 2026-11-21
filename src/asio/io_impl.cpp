@@ -328,13 +328,27 @@ struct asio_acceptor {
 
   internet_address listen() {
     a.listen();
+    // для использования по сути try_accept
+    a.non_blocking(true);
+    // делает connection_aborted ошибкой
+    a.set_option(asio::socket_base::enable_connection_aborted(true));
     return get_local_endpoint();
   }
 
   dd::task<any_connection_t> accept(io_error_code& ec) {
     asio::ip::tcp::socket socket(a.get_executor());
 
-    co_await net.accept(a, socket, ec);
+    do {
+      // если соединение уже готово забираем сразу. Иначе при большой нагрузке соединение будет ждать
+      // обработки того что перед ним в очереди
+      // P.S. не знаю как, но азио добилось что приходится писать (void) дважды, иначе варн
+      (void)(void)a.accept(socket, ec);
+      if (ec == asio::error::would_block) {
+        ec.clear();
+        co_await net.accept(a, socket, ec);
+      }
+      // цикл по сути игнорирует connection_aborted также как это делает asio
+    } while (ec == asio::error::connection_aborted);
     if (ec)
       co_return any_connection_t{};
     apply_tcp_options(socket, options);
