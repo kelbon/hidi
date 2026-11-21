@@ -2,6 +2,7 @@
 
 #include "hidi/any_connection.hpp"
 #include "hidi/utils/any_io_context.hpp"
+#include "hidi/utils/reusable_buffers_stack.hpp"
 
 #include <boost/intrusive/slist.hpp>
 #include <boost/asio/error.hpp>
@@ -13,9 +14,18 @@
 
 namespace hidi {
 
+namespace noexport {
+
+inline reusable_buffers_stack& reusable_buffers() noexcept {
+  thread_local reusable_buffers_stack s(1024);
+  return s;
+}
+
+}  // namespace noexport
+
 // * буферизирует write для Inner, даёт ей гарантию не более одного читателя/писателя одновременно
 // * try_write копирует данные в `outbuf` и сразу сообщает, что всё записано
-// отправляется одной записью в конце такта, при ошибке фейлит следующие операции
+// при ошибке фейлит следующие операции
 // * shutdown сначала дописывает принятое (не дольше DRAIN_TIMEOUT), затем закрывает внутреннее соединение
 template <typename Inner>
 struct buffered_connection {
@@ -30,10 +40,10 @@ struct buffered_connection {
   // планирует отправку в конце такта и создаёт таймер для shutdown. Меняется при rebind
   any_io_context_ref io;
 
-  // копится до конца такта
+  // копится до отправки
   std::vector<byte_t> outbuf;
-  // пишется сейчас, хранится для переиспользования памяти
-  std::vector<byte_t> sendbuf;
+  std::vector<byte_t> sending;
+  size_t sending_offset = 0;
   // ждут места в outbuf (противодавление), данные переносятся в outbuf в порядке очереди
   bi::slist<writer_node, bi::cache_last<true>> waiters;
   // первая ошибка записи, после неё запись невозможна
@@ -67,6 +77,9 @@ struct buffered_connection {
     return inner.try_read(buf);
   }
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec) {
+    // эвристика: если данные кончились, отвечать больше не на что
+    if (allow_write)
+      send_ready();
     inner.start_read(callback, buf, ec);
   }
   size_t try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
@@ -83,7 +96,7 @@ struct buffered_connection {
       return 0;
     // большие записи тоже копируются: без копии пишущий ждал бы конца записи в сокет вместо продолжения
     // такта, а выигрыш был бы только на кадрах больше 16 КБ (если собеседник разрешил такие кадры)
-    outbuf.insert(outbuf.end(), buf.begin(), buf.end());
+    append_to_outbuf(buf);
     schedule_writer();
     return buf.size();
   }
@@ -131,7 +144,7 @@ struct buffered_connection {
   static constexpr bool is_https = Inner::is_https;
 
   [[nodiscard]] bool has_work() const noexcept {
-    return !outbuf.empty() || !waiters.empty();
+    return !outbuf.empty() || !waiters.empty() || !sending.empty();
   }
   // писатель ждёт работы и работы нет
   [[nodiscard]] bool idle() const noexcept {
@@ -197,13 +210,19 @@ struct buffered_connection {
 
   using nodes_t = bi::slist<writer_node, bi::cache_last<true>>;
 
+  void append_to_outbuf(std::span<const byte_t> data) {
+    if (outbuf.capacity() == 0)
+      outbuf = noexport::reusable_buffers().get_buffer();
+    outbuf.insert(outbuf.end(), data.begin(), data.end());
+  }
+
   // переносит данные ждущих места в outbuf, пока он не заполнится. Возвращает перенесённых, их надо разбудить
   static nodes_t move_waiters_to_outbuf(buffered_connection& c) {
     nodes_t moved;
     while (!c.waiters.empty() && c.outbuf.size() < c.outbuf_limit) {
       writer_node& n = c.waiters.front();
       c.waiters.pop_front();
-      c.outbuf.insert(c.outbuf.end(), n.data.begin(), n.data.end());
+      c.append_to_outbuf(n.data);
       n.ec.clear();
       moved.push_back(n);
     }
@@ -216,6 +235,25 @@ struct buffered_connection {
       writer_node& n = nodes.front();
       nodes.pop_front();
       n.callback.resume();
+    }
+  }
+
+  // отправляет без ожидания outbuf и данные ждущих места, пока сокет принимает. Не принятое сокетом
+  // остаётся в `sending`
+  void send_ready() noexcept {
+    while (sending.empty() && !write_ec && (!outbuf.empty() || !waiters.empty())) {
+      nodes_t moved = move_waiters_to_outbuf(*this);
+      // перенесённые дописывают в outbuf (пока не заполнится), это уходит той же записью
+      resume_all(moved);
+      if (!sending.empty())
+        break;  // start_read уже написал
+      size_t written = inner.try_write(outbuf, write_ec);
+      if (write_ec || written == outbuf.size()) {
+        noexport::reusable_buffers().return_buffer(std::move(outbuf));
+      } else {
+        sending = std::move(outbuf);
+        sending_offset = written;
+      }
     }
   }
 
@@ -238,21 +276,15 @@ struct buffered_connection {
     for (;;) {
       co_await writer_idle_awaiter(c);
       // запланированный писатель мог проснуться после ошибки, тогда отправлять уже нечего
-      while (c->has_work() && !c->write_ec) {
-        nodes_t moved = move_waiters_to_outbuf(*c);
-        // перенесённые дописывают в outbuf (пока не заполнится), это уходит той же записью
-        resume_all(moved);
+      while (!c->write_ec) {
+        c->send_ready();
+        if (c->sending.empty())
+          break;
+        // сокет принял не всё: остаток дописывается с ожиданием, новое копится в следующем буфере
         io_error_code ec;
-        size_t written = c->inner.try_write(c->outbuf, ec);
-        if (ec || written == c->outbuf.size()) {
-          // по возможности используем только один буфер
-          // чтобы уменьшить объём рабочей памяти и было меньше кеш мисов
-          c->outbuf.clear();
-        } else {
-          std::swap(c->sendbuf, c->outbuf);
-          co_await start_write_awaiter(c->inner, ec, std::span<const byte_t>(c->sendbuf).subspan(written));
-          c->sendbuf.clear();
-        }
+        co_await start_write_awaiter(c->inner, ec,
+                                     std::span<const byte_t>(c->sending).subspan(c->sending_offset));
+        noexport::reusable_buffers().return_buffer(std::move(c->sending));
         if (ec && !c->write_ec)
           c->write_ec = ec;
       }
