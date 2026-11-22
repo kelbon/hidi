@@ -83,9 +83,6 @@ struct buffered_connection {
     return inner.try_read(buf);
   }
   void start_read(std::coroutine_handle<> callback, std::span<byte_t> buf, io_error_code& ec) {
-    // эвристика: если данные кончились, отвечать больше не на что
-    if (!shutdowned)
-      send_ready();
     inner.start_read(callback, buf, ec);
   }
   size_t try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
