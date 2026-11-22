@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 kelbon (github.com/kelbon)
+
 #include "hidi/utils/memory_queue.hpp"
 #include "hidi/h2connection.hpp"
 #include "hidi/h2send_frames.hpp"

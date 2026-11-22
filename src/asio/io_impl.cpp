@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 kelbon (github.com/kelbon)
+
 #include "hidi/asio/io_impl.hpp"
 #include "hidi/asio/awaiters.hpp"
 #include "hidi/buffered_connection.hpp"
