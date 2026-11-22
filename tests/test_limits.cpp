@@ -118,14 +118,28 @@ SERVER_TEST("server bytes limit") {
 
 SERVER_TEST("server sessions limit") {
   server.get_options().limit_clients_count = 0;
-  auto client = co_await fake_client_connection(ioctx, addr);
-  co_await client.send_client_magic();
-  co_await client.send_settings();
-  (void)co_await client.receive_settings();
-  co_await client.receive_settings_ack();
-  // сервер сообщает причину отказа и сразу закрывает соединение
-  co_await client.receive_goaway(0, errc_e::NO_ERROR, ping_e::ERROR);
-  co_await client.wait_connection_dropped(deadline_after(1s));
+  SECTION("goaway") {
+    auto client = co_await fake_client_connection(ioctx, addr);
+    co_await client.send_client_magic();
+    co_await client.send_settings();
+    (void)co_await client.receive_settings();
+    co_await client.receive_settings_ack();
+    // сервер сообщает причину отказа и сразу закрывает соединение
+    co_await client.receive_goaway(0, errc_e::NO_ERROR, ping_e::ERROR);
+    co_await client.wait_connection_dropped(deadline_after(1s));
+  }
+  SECTION("drop without handshake") {
+    server.get_options().drop_over_limit_silently = true;
+    any_connection_t c = co_await ioctx.create_connection_client({addr}, deadline_after(1s));
+    io_error_code ec;
+    co_await c.handshake(ec, /*is_client=*/true);
+    // TLS handshake обрывается, а без TLS соединение закрывается, не дожидаясь клиента
+    REQUIRE(is_tls_server == bool(ec));
+    if (!ec) {
+      test_h2connection client(new h2connection(std::move(c), ioctx.io), /*client=*/true);
+      co_await client.wait_connection_dropped(deadline_after(1s));
+    }
+  }
 }
 
 // блок заголовков (HEADERS + CONTINUATION) учитывается в памяти сессии

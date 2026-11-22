@@ -154,6 +154,10 @@ struct h2server::impl {
   // Note: this code ignores possible bad_alloc and other logs exceptions
   dd::task<void> session_lifecycle(dd::gate::holder, any_connection_t socket) try {
     assert(std::this_thread::get_id() == tid);
+    if (options.drop_over_limit_silently && sessions.size() >= options.limit_clients_count) [[unlikely]] {
+      HTTP2_LOG_TRACE(logctx(), "connection dropped due server`s clients limit exceeding");
+      co_return;
+    }
 
     h2connection_ptr http2con = new h2connection(std::move(socket), ioctx_ref());
     if (!http2con || !creator)
