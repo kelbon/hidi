@@ -4,7 +4,7 @@
 
 Подробно интерфейс описан в [h2client.hpp](../include/hidi/h2client.hpp)
 
-### Примеры
+## Примеры
 
 ```cpp
 #include <print>
@@ -69,4 +69,4 @@ dd::task<void> tunnel(hidi::h2client& client) {
 
 ## Опции
 
-Опции клиента подробно описаны в [h2client_options.hpp](../include/hidi/h2client_options.hpp):
+Опции клиента подробно описаны в [h2client_options.hpp](../include/hidi/h2client_options.hpp)

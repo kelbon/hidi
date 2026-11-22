@@ -3,6 +3,8 @@
 Реализация HTTP/2 на C++20: клиент и сервер. Полностью соответствуют спецификации
 ([RFC 9113](https://www.rfc-editor.org/rfc/rfc9113)), проходят [h2spec](tests/test_h2spec.cpp)
 
+[English version](docs/en/README.md)
+
 [![HTTP Arena H/2](https://img.shields.io/endpoint?url=https://http-arena.com/badge/hidi/h2.json)](https://http-arena.com/#scope=h2&type=engine&tuned=0)
 
 ## Подключение
@@ -10,7 +12,7 @@
 Через [CPM](https://github.com/cpm-cmake/CPM.cmake):
 
 ```cmake
-CPMAddPackage("gh:kelbon/hidi@0.19.0") # не забудьте указать версию
+CPMAddPackage("gh:kelbon/hidi@1.0.0")
 
 target_link_libraries(myapp PRIVATE hidilib)
 ```
@@ -39,4 +41,4 @@ target_link_libraries(myapp PRIVATE hidilib)
 hidi это низкоуровневый инструмент, использующийся в:
 
 - [svarg](https://github.com/kelbon/svarg) - генерирует из OpenAPI спеки сервер и клиент на hidi
-- [BT-YE](https://github.com/kelbon/btye) - фреймворк для создания HTTP сервисов
+- [BT-YE](https://github.com/kelbon/BT-YE) - фреймворк для создания HTTP сервисов

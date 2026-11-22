@@ -4,6 +4,7 @@
 [h2server.hpp](../include/hidi/h2server.hpp)
 
 Многопоточный сервер создаётся из однопоточного с помощью `hidi::h2server_mt`
+
 ```cpp
 #include <hidi/h2server.hpp>
 
@@ -56,7 +57,7 @@ dd::task<hidi::http_response> handle_request(hidi::http_request, hidi::request_c
 
 Тогда вместо `handle_request` вызывается `handle_request_stream`: тело
 запроса приходит по кускам через `memory_queue`, а ответ - тоже канал. Так же устроены CONNECT и websocket
-(чтобы клиент увидел поддержку сервером websocket используйте опцию `supports_websocket`)
+(чтобы клиент увидел поддержку сервером websocket, используйте опцию `supports_websocket`)
 
 ```cpp
 bool answer_before_data(const hidi::http_request& r) const noexcept override {
@@ -81,7 +82,7 @@ dd::task<std::pair<hidi::http_response, hidi::bistream_body_maker_t>> handle_req
 
 ## Опции
 
-Опции сервера подробно описаны в [h2server_options.hpp](../include/hidi/h2server_options.hpp):
+Опции сервера подробно описаны в [h2server_options.hpp](../include/hidi/h2server_options.hpp)
 
 Отдельно стоит упомянуть `h2server_options::hardened()` - готовый набор опций для защиты сервера, выходящего в открытый интернет
 
