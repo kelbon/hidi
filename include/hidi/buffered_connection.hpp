@@ -102,10 +102,6 @@ struct buffered_connection {
       return 0;
     append_to_outbuf(buf);
     notify_writer();
-    // писатель будится не сразу (идёт в конец очереди .attach)
-    // имеет смысл написать и освободить буфер как можно раньше и так снизить размер активной памяти
-    if (outbuf.size() >= outbuf_limit && can_write())
-      send_ready();
     return buf.size();
   }
   void start_write(writer_node* n) {
