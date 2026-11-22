@@ -1,4 +1,5 @@
-
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 kelbon (github.com/kelbon)
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wall"

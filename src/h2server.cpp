@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 kelbon (github.com/kelbon)
 
 #include "hidi/h2server.hpp"
 

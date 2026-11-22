@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 kelbon (github.com/kelbon)
+
 #pragma once
 
 // all used asio headers with Windows.h garbage
