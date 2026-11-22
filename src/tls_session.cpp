@@ -6,6 +6,7 @@
 #include <cassert>
 #include <climits>
 #include <cstring>
+#include <memory>
 
 namespace hidi {
 
@@ -23,16 +24,15 @@ struct tls_session::bio {
 
   static int write(BIO* b, const char* buf, int len) {
     BIO_clear_retry_flags(b);
-    auto* out = static_cast<std::vector<byte_t>*>(BIO_get_data(b));
+    auto* out = static_cast<record_sink*>(BIO_get_data(b));
     if (!out)
       return len;
     // исключение не должно пройти через TLS библиотеку, нехватка памяти становится ошибкой SSL_*
     try {
-      out->insert(out->end(), (const byte_t*)buf, (const byte_t*)buf + len);
+      return (*out)(std::span((const byte_t*)buf, size_t(len))) ? len : -1;
     } catch (...) {
       return -1;
     }
-    return len;
   }
 
   static long ctrl(BIO*, int cmd, long, void*) {
@@ -60,7 +60,7 @@ namespace {
 struct output_scope {
   BIO* wbio;
 
-  output_scope(BIO* wbio, std::vector<byte_t>* out) noexcept : wbio(wbio) {
+  output_scope(BIO* wbio, tls_session::record_sink* out) noexcept : wbio(wbio) {
     BIO_set_data(wbio, out);
   }
   ~output_scope() {
@@ -122,7 +122,12 @@ void tls_session::commit_readen_encrypted(size_t n) noexcept {
 
 bool tls_session::handshake(std::vector<byte_t>& to_send, bool is_client, io_error_code& ec) {
   ERR_clear_error();
-  output_scope out(SSL_get_wbio(ssl), &to_send);
+  auto append = [&to_send](std::span<const byte_t> record) {
+    to_send.insert(to_send.end(), record.begin(), record.end());
+    return true;
+  };
+  record_sink sink = append;
+  output_scope out(SSL_get_wbio(ssl), std::addressof(sink));
   // сторону задаёт первый вызов SSL_connect / SSL_accept, дальше они просто продолжают handshake
   int r = is_client ? SSL_connect(ssl) : SSL_accept(ssl);
   if (r == 1)
@@ -149,19 +154,9 @@ size_t tls_session::decrypt(std::span<byte_t> plain, io_error_code& ec) {
   return n;
 }
 
-void tls_session::encrypt(std::span<const byte_t> plain, std::vector<byte_t>& to_send, io_error_code& ec) {
-  // одно выделение памяти вместо роста на каждой записи. Запас на заголовок, nonce и тег записи примерный
-  constexpr size_t MAX_RECORD_PLAIN_SIZE = 1 << 14;
-  constexpr size_t RECORD_OVERHEAD = 64;
-  try {
-    to_send.reserve(to_send.size() + plain.size() +
-                    (plain.size() / MAX_RECORD_PLAIN_SIZE + 1) * RECORD_OVERHEAD);
-  } catch (...) {
-    ec = boost::asio::error::no_memory;
-    return;
-  }
+void tls_session::encrypt(std::span<const byte_t> plain, record_sink out, io_error_code& ec) {
   ERR_clear_error();
-  output_scope out(SSL_get_wbio(ssl), &to_send);
+  output_scope scope(SSL_get_wbio(ssl), std::addressof(out));
   while (!plain.empty()) {
     // без SSL_MODE_ENABLE_PARTIAL_WRITE и с BIO, который не блокирует, SSL_write шифрует всё переданное сразу
     int r = SSL_write(ssl, plain.data(), int(std::min<size_t>(plain.size(), INT_MAX)));
@@ -173,6 +168,24 @@ void tls_session::encrypt(std::span<const byte_t> plain, std::vector<byte_t>& to
     }
     plain = plain.subspan(size_t(r));
   }
+}
+
+void tls_session::encrypt(std::span<const byte_t> plain, std::vector<byte_t>& to_send, io_error_code& ec) {
+  // одно выделение памяти вместо роста на каждой записи. Запас на заголовок, nonce и тег записи примерный
+  constexpr size_t MAX_RECORD_PLAIN_SIZE = 1 << 14;
+  constexpr size_t RECORD_OVERHEAD = 64;
+  try {
+    to_send.reserve(to_send.size() + plain.size() +
+                    (plain.size() / MAX_RECORD_PLAIN_SIZE + 1) * RECORD_OVERHEAD);
+  } catch (...) {
+    ec = boost::asio::error::no_memory;
+    return;
+  }
+  auto append = [&to_send](std::span<const byte_t> record) {
+    to_send.insert(to_send.end(), record.begin(), record.end());
+    return true;
+  };
+  encrypt(plain, append, ec);
 }
 
 }  // namespace hidi

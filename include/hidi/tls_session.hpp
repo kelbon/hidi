@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hidi/errors.hpp"
+#include "hidi/utils/fn_ref.hpp"
 #include "hidi/utils/memory.hpp"
 #include "hidi/utils/readahead_buffer.hpp"
 
@@ -52,9 +53,15 @@ struct tls_session {
   // pre: handshake завершён
   [[nodiscard]] size_t decrypt(std::span<byte_t> plain, io_error_code& ec);
 
-  // шифрует весь `plain` (записями по 2^14 байт), дописывает в конец `to_send`
-  // при ошибке в `to_send` может быть дописана часть, отправлять её не нужно
+  // получает готовую TLS запись (действительна только во время вызова). false - отказ, encrypt завершится
+  // ошибкой
+  using record_sink = fn_ref<bool(std::span<const byte_t>)>;
+
+  // шифрует весь `plain` (записями по 2^14 байт), каждую запись сразу отдаёт в `out`
+  // при ошибке часть записей уже могла быть отдана
   // pre: handshake завершён
+  void encrypt(std::span<const byte_t> plain, record_sink out, io_error_code& ec);
+  // то же, но дописывает в конец `to_send`
   void encrypt(std::span<const byte_t> plain, std::vector<byte_t>& to_send, io_error_code& ec);
 
   SSL* native_handle() noexcept {
