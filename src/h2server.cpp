@@ -195,7 +195,7 @@ struct h2server::impl {
     };
 
     try {
-      any_timer timer = ioctx().create_timer();
+      any_timer timer = ioctx().create_timer(timer_precision::coarse);
       timer.set_callback([session_ptr](bool canceled) {
         if (canceled)
           return;
@@ -280,7 +280,7 @@ struct h2server::impl {
     for (auto& session : sessions)
       session.request_shutdown();
     stop_listeners();
-    any_timer timer = ioctx().create_timer();
+    any_timer timer = ioctx().create_timer(timer_precision::coarse);
     if (deadline != deadline_t::never()) {
       timer.set_callback([this](bool canceled) {
         if (canceled)

@@ -43,7 +43,7 @@ static streaming_body_t as_streaming_body(dd::channel<std::span<const byte_t>> c
 // sends requests, but body will be splitted into random chunks
 dd::task<void> send_echo_request_as_stream(fuzzer& fuz, h2client& c, hreq req) try {
   auto sleepcb = [&c](duration_t d, io_error_code& ec) -> dd::task<void> {
-    any_timer timer = c.ioctx().create_timer();
+    any_timer timer = c.ioctx().create_timer(timer_precision::exact);
     co_await net.sleep(timer, d, ec);
   };
   auto bodystr = streaming_body_with_trailers(

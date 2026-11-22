@@ -325,8 +325,8 @@ struct test_io {
   void restart() {
     return io.restart();
   }
-  any_timer create_timer() {
-    return io.create_timer();
+  any_timer create_timer(timer_precision p) {
+    return io.create_timer(p);
   }
   void attach(dd::task_node* n) {
     io.attach(n);
@@ -368,7 +368,7 @@ inline internet_address localhost() noexcept {
 // and AFTER tls handshake
 inline dd::task<test_h2connection> fake_server_session(test_io io, server_endpoint addr, h2client& client,
                                                        deadline_t deadline = deadline_after(10s)) {
-  any_timer timer = io.create_timer();
+  any_timer timer = io.create_timer(timer_precision::exact);
   timer.set_callback([](bool canceled) {
     if (canceled)
       return;

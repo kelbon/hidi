@@ -318,7 +318,7 @@ struct net_t {
   }
 
   static dd::task<void> sleep(any_io_context_ref io, std::chrono::nanoseconds duration) {
-    any_timer timer = io.create_timer();
+    any_timer timer = io.create_timer(timer_precision::exact);
     io_error_code ec;
     co_await sleep(timer, duration, ec);
     (void)ec;  // ignore error

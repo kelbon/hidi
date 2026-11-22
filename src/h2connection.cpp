@@ -279,9 +279,9 @@ h2connection::h2connection(any_connection_t&& c, any_io_context_ref ctx)
     : tcpcon(std::move(c)),
       buckets(initial_buckets_count),
       responses({buckets.data(), buckets.size()}),
-      pingtimer(ctx.create_timer()),
-      pingdeadlinetimer(ctx.create_timer()),
-      timeout_warden_timer(ctx.create_timer()),
+      pingtimer(ctx.create_timer(timer_precision::coarse)),
+      pingdeadlinetimer(ctx.create_timer(timer_precision::coarse)),
+      timeout_warden_timer(ctx.create_timer(timer_precision::exact)),
       ioctx(ctx) {
   assert(pingtimer.has_value());
   assert(pingdeadlinetimer.has_value());

@@ -34,4 +34,9 @@ anyany_method2_n(set_timer_callback_m, set_callback,
 // non-movable
 using any_timer = aa::any_with<arm_m, arm_periodic_m, is_armed_m, set_timer_callback_m, cancel_m>;
 
+enum struct timer_precision {
+  exact,
+  coarse,
+};
+
 }  // namespace hidi

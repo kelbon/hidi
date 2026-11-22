@@ -151,7 +151,7 @@ dd::job h2client::start_connecting(h2client* self, deadline_t deadline) {
       con->logctx.lvl = self->m_options.logctx.lvl;
       con->logctx.dolog = self->m_options.logctx.dolog;
 
-      any_timer timer = self->ioctx().create_timer();
+      any_timer timer = self->ioctx().create_timer(timer_precision::exact);
       timer.arm(deadline.tp);
       timer.set_callback([con](bool canceled) {
         if (!canceled)
@@ -821,7 +821,7 @@ void h2client::cancel_all() noexcept {
 }
 
 dd::task<void> h2client::sleep(duration_t d, io_error_code& ec) {
-  any_timer timer = ioctx().create_timer();
+  any_timer timer = ioctx().create_timer(timer_precision::exact);
   co_await net.sleep(timer, d, ec);
 }
 

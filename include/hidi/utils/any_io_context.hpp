@@ -33,7 +33,8 @@ anyany_method2_n(end_task_m, end_task, (&self) requires(self.end_task())->void);
 anyany_method2_n(running_in_this_thread_m, running_in_this_thread,
                  (&self) requires(self.running_in_this_thread())->bool);
 
-anyany_method2_n(create_timer_m, create_timer, (&self) requires(self.create_timer())->any_timer);
+anyany_method2_n(create_timer_m, create_timer,
+                 (&self, timer_precision p) requires(self.create_timer(p))->any_timer);
 // never invokes task immediately, pushes it into queue always
 // may be invoked from another thread (ONLY IN h2server_mt)
 // 'attach' for compatibility with dd::any_executor_ref

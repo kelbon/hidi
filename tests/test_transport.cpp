@@ -67,7 +67,7 @@ struct destroy_mark {
 // заменённый колбек доживает до конца своего вызова
 TRANSPORT_TEST("timer callback rearms and replaces itself") {
   any_io_context ioctx = make_asio_io_context(rawio);
-  any_timer timer = ioctx.create_timer();
+  any_timer timer = ioctx.create_timer(timer_precision::exact);
   bool fired = false;
   bool canceled = false;
   SECTION("rearm") {
@@ -124,7 +124,7 @@ TRANSPORT_TEST("client TLS handshake is interrupted by shutdown") {
   any_connection_t con = co_await ioctx.create_connection_client(
       {silent.local_endpoint()}, deadline_after(5s), {}, make_ssl_context_for_client({}));
   bool shutdown_done = false;
-  any_timer timer = ioctx.create_timer();
+  any_timer timer = ioctx.create_timer(timer_precision::exact);
   timer.set_callback([&](bool canceled) {
     if (!canceled)
       (void)shutdown_connection(con, shutdown_done);
