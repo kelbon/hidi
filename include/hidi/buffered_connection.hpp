@@ -159,7 +159,7 @@ struct buffered_connection {
  private:
   bool can_write() const noexcept {
     // гарантия для Inner - не более одного писателя за раз
-    // поэтому пока находимся в start_write больше писать
+    // поэтому пока находимся в start_write больше нельзя писать
     return sending.empty() && !write_ec;
   }
   [[nodiscard]] bool has_work() const noexcept {
@@ -170,11 +170,12 @@ struct buffered_connection {
     return writer && !has_work();
   }
 
-  // писатель отправит накопленное в конце такта: всё, что уже готово выполниться, успеет дописать в outbuf
   void notify_writer() {
     if (!writer)
       return;
     writer_task.task = std::exchange(writer, nullptr);
+    // за счёт attach встаёт в конец очереди, так что в конце такта запишет всё пачкой
+    // такт - одна обработка очереди в воркере
     io.attach(&writer_task);
   }
 
@@ -253,7 +254,7 @@ struct buffered_connection {
     }
   }
 
-  // пытается записать тех кто ждёт. Кому не хватило места идут в sending
+  // пытается записать тех кто ждёт. Заполняет sending если нужно что-то дозаписать
   // инвариант: если !sending.empty(), то !write_ec
   void send_ready() noexcept {
     while (can_write() && (!outbuf.empty() || !waiters.empty())) {

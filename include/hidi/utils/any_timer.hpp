@@ -5,6 +5,8 @@
 #include "hidi/utils/deadline.hpp"
 #include "hidi/utils/fn_ref.hpp"
 
+#include <cassert>
+
 namespace hidi {
 
 // arms timer to execute callback after 'd'
