@@ -19,7 +19,7 @@ namespace noexport {
 inline reusable_buffers_stack& reusable_buffers() noexcept {
   // благодаря этим буферам при большом количестве соединений память
   // переиспользуется лучше и меньше кеш мисов
-  thread_local reusable_buffers_stack s(1024);
+  thread_local reusable_buffers_stack s;
   return s;
 }
 
