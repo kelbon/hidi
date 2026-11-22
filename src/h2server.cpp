@@ -181,9 +181,7 @@ struct h2server::impl {
       erase_byref(sessions, session);
     };
 
-    auto request_terminate_inactive = [session_ptr, nm = this->logctx().name](bool canceled) {
-      if (canceled)
-        return;
+    auto request_terminate_inactive = [session_ptr, nm = this->logctx().name] {
       HTTP2_LOG_TRACE(session_ptr->logctx(), "{} drops connection due client inactivity", nm);
       session_ptr->request_terminate();
     };
@@ -227,23 +225,21 @@ struct h2server::impl {
     (void)start_writer_for_server(session.connection, request_terminate, options.force_disable_hpack,
                                   session.connection_parts_gate.hold());
 
-    session.connection->pingdeadlinetimer.set_callback(request_terminate_inactive);
-    // clang-format off
-    session.connection->pingtimer.set_callback([framecount = size_t(0), &session, server = this](bool canceled) mutable {
+    // простой обнаруживается не позже 1.25 * idle_timeout
+    enum { IDLE_CHECKS = 4 };
+    session.connection->pingtimer.set_callback([framecount = size_t(0), idle_checks = size_t(0), &session,
+                                                request_terminate_inactive](bool canceled) mutable {
       if (canceled)
         return;
-      if (session.framecount != framecount) {
+      if (session.framecount != framecount || session.has_unfinished_requests()) {
         framecount = session.framecount;
+        idle_checks = 0;
         return;
       }
-      // nothing happens since last call
-      if (!session.connection->pingdeadlinetimer.is_armed() && !session.has_unfinished_requests()) {
-        HTTP2_LOG_TRACE(session.logctx(), "detect nothing happens, arm idle deadline timer");
-        session.connection->pingdeadlinetimer.arm(server->options.idle_timeout);
-      }
+      if (++idle_checks == IDLE_CHECKS)
+        request_terminate_inactive();
     });
-    // clang-format on
-    session.connection->pingtimer.arm_periodic(std::chrono::milliseconds(100));
+    session.connection->pingtimer.arm_periodic(options.idle_timeout / IDLE_CHECKS);
     reader_ec = co_await start_server_reader_for(session);
     HTTP2_LOG_TRACE(session.logctx(), "reader stops, waiting stop");
   drop_session:

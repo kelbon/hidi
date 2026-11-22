@@ -305,7 +305,7 @@ struct h2connection {
   bool graceful_shutdown_goaway_sended = false;
   // invariant: has_value()
   any_timer pingtimer;
-  // invariant: has_value()
+  // invariant: has_value(). На сервере не используется
   any_timer pingdeadlinetimer;
   // invariant: has_value()
   any_timer timeout_warden_timer;
