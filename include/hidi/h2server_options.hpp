@@ -32,6 +32,8 @@ struct h2server_options {
   size_t limit_requests_memory_usage_bytes = size_t(-1);
   // При превышении лимита новые соединения будут отброшены
   size_t limit_clients_count = size_t(-1);
+  // true - соединения сверх limit_clients_count закрываются сразу, без TLS handshake и GOAWAY
+  bool drop_over_limit_silently = false;
   // Сколько кадров, отправляемых в ответ на кадры клиента (PING ACK, SETTINGS ACK, RST_STREAM,
   // WINDOW_UPDATE), может одновременно ждать записи. Если клиент шлёт такие кадры, но не читает ответы, они
   // копятся в памяти
