@@ -118,7 +118,7 @@ size_t tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec)
   // за счёт этого меньше активная память и меньше кеш мисов
   thread_local std::vector<byte_t> encrypted;
   encrypted.clear();
-  // на каждую tls внутри делает вызов калбека. Результаты складываются в encrypted
+  // на каждую tls запись внутри делает вызов калбека. Результаты складываются в encrypted
   // и благодаря этому меньше системных вызовов
   session.encrypt(buf, encrypted, ec);
   if (ec)

@@ -78,6 +78,8 @@ struct h2server::impl {
       : io(std::move(io)), ssl(std::move(ssl)), options(std::move(opts)), creator(&owner) {
     options.logctx.name = unique_name{};  // generate new (for different names for each server in h2server_mt)
     options.logctx.name.set_prefix(SERVER_PREFIX);
+    if (options.idle_timeout < std::chrono::milliseconds(1))
+      options.idle_timeout = std::chrono::milliseconds(1);
   }
 
   internet_address listen(server_endpoint a) {
@@ -161,7 +163,7 @@ struct h2server::impl {
 
     h2connection_ptr http2con = new h2connection(std::move(socket), ioctx_ref());
     http2con->pingdeadlinetimer.emplace<never_timer>();  // unused on server
-    if (!http2con || !creator)
+    if (!creator)
       co_return;
     if (sessionsgate.is_closed()) {
       http2con->shutdown(reqerr_e::CANCELLED);
