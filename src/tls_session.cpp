@@ -133,8 +133,8 @@ bool tls_session::handshake(std::vector<byte_t>& to_send, bool is_client, io_err
 
 size_t tls_session::decrypt(std::span<byte_t> plain, io_error_code& ec) {
   ERR_clear_error();
-  // во время SSL_read AWS-LC пишет только фатальный алерт, после которого сессия непригодна. Ответ на
-  // KeyUpdate он откладывает до следующего SSL_write, то есть до encrypt
+  // давным давно OpenSsl писала иногда при SSL_read, но теперь все библиотеки гарантируют, что
+  // KeyUpdate будет отложен до следующей записи. Фатальный алёрт неважен, после него уже всё
   output_scope out(SSL_get_wbio(ssl), nullptr);
   // SSL_read отдаёт не больше одной записи за вызов
   size_t n = 0;

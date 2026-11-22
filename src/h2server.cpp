@@ -245,10 +245,6 @@ struct h2server::impl {
     // clang-format on
     session.connection->pingtimer.arm_periodic(std::chrono::milliseconds(100));
     reader_ec = co_await start_server_reader_for(session);
-    if (reader_ec != reqerr_e::DONE) {
-      // give time for sending goaway
-      co_await net.sleep(ioctx_ref(), std::chrono::milliseconds(1));
-    }
     HTTP2_LOG_TRACE(session.logctx(), "reader stops, waiting stop");
   drop_session:
     session.request_terminate();

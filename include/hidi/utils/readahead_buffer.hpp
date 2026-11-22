@@ -38,13 +38,13 @@ struct readahead_buffer {
   // pre: bufsz > 0
   explicit readahead_buffer(size_t bufsz = DEFAULT_SIZE) : readahead_buffer(bufsz, bufsz * 8) {
   }
-  // растёт до `limit`, limit <= bufsz - не растёт
+  // растёт до `limit` (не меньше 1024)
   // pre: bufsz > 0
   explicit readahead_buffer(size_t bufsz, size_t limit)
-      : readen(bufsz),
+      : readen(std::min(bufsz, std::max<size_t>(limit, 1024))),
         readen_start(readen.data()),
         readen_end(readen.data()),
-        sz_limit(std::max(bufsz, limit)) {
+        sz_limit(std::max<size_t>(limit, 1024)) {
     assert(bufsz > 0);
   }
 
