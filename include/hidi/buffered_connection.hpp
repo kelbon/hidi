@@ -102,6 +102,10 @@ struct buffered_connection {
       return 0;
     append_to_outbuf(buf);
     notify_writer();
+    // писатель будится не сразу (идёт в конец очереди .attach)
+    // имеет смысл написать и освободить буфер как можно раньше и так снизить размер активной памяти
+    if (outbuf.size() >= outbuf_limit && can_write())
+      send_ready();
     return buf.size();
   }
   void start_write(writer_node* n) {
@@ -258,6 +262,9 @@ struct buffered_connection {
       resume_all(moved);
       if (!can_write())
         break;  // start_read уже написал
+      // перенесённые могли заполнить буфер и уже отправить его сами (try_write)
+      if (outbuf.empty())
+        continue;
       size_t written = inner.try_write(outbuf, write_ec);
       if (write_ec || written == outbuf.size()) {
         noexport::reusable_buffers().return_buffer(std::move(outbuf));
