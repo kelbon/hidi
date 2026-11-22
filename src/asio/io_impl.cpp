@@ -114,30 +114,26 @@ void tls_connection::start_read(std::coroutine_handle<> h, std::span<byte_t> buf
 
 size_t tls_connection::try_write(std::span<const byte_t> buf, io_error_code& ec) noexcept {
   assert(unsent.empty());
-  // один буфер на все соединения, используется синхронно и только здесь
-  // за счёт этого меньше активная память и меньше кеш мисов
-  thread_local std::vector<byte_t> encrypted;
-  encrypted.clear();
-  // на каждую tls запись внутри делает вызов калбека. Результаты складываются в encrypted
-  // и благодаря этому меньше системных вызовов
-  session.encrypt(buf, encrypted, ec);
-  if (ec)
-    return 0;
+  io_error_code send_ec;
   // в отличие от ssl::stream::write_some, который при заполненном сокете теряет остаток шифротекста,
-  // здесь остаток сохраняется в unsent
-  size_t written = sock.write_some(asio::buffer(encrypted), ec);
-  if (ec == asio::error::would_block)
-    ec.clear();  // not a error
+  // здесь остаток (и всё дальнейшее) сохраняется в unsent
+  auto send_record = [&](std::span<const byte_t> record) {
+    if (unsent.empty()) {
+      record = record.subspan(sock.write_some(asio::buffer(record.data(), record.size()), send_ec));
+      if (send_ec == asio::error::would_block)
+        send_ec.clear();  // not a error
+      if (send_ec)
+        return false;
+    }
+    unsent.insert(unsent.end(), record.begin(), record.end());
+    return true;
+  };
+  session.encrypt(buf, send_record, ec);
+  if (send_ec)
+    ec = send_ec;
   if (ec)
     return 0;
-  if (written == encrypted.size())
-    return buf.size();
-  try {
-    unsent.assign(encrypted.begin() + written, encrypted.end());
-  } catch (...) {
-    ec = asio::error::no_memory;
-  }
-  return 0;
+  return unsent.empty() ? buf.size() : 0;
 }
 
 void tls_connection::start_write(writer_node* n) {

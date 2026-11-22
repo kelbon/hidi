@@ -102,6 +102,8 @@ struct buffered_connection {
       return 0;
     append_to_outbuf(buf);
     notify_writer();
+    // не делает send_ready, чтобы не чередовать user/syscal/user/syscal при множестве соединений
+    // вместо чередования множество writer от разных соединений в конце такта сделают свои записи
     return buf.size();
   }
   void start_write(writer_node* n) {
