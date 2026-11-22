@@ -160,6 +160,7 @@ struct h2server::impl {
     }
 
     h2connection_ptr http2con = new h2connection(std::move(socket), ioctx_ref());
+    http2con->pingdeadlinetimer.emplace<never_timer>();  // unused on server
     if (!http2con || !creator)
       co_return;
     if (sessionsgate.is_closed()) {

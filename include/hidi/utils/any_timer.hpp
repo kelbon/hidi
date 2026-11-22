@@ -39,4 +39,22 @@ enum struct timer_precision {
   coarse,
 };
 
+// for unused timers. any_timer not empty, but does nothing and checks its really unused
+struct never_timer {
+  void arm(deadline_t) noexcept {
+    assert(false && "never_timer is not for arming");
+  }
+  void arm_periodic(duration_t) noexcept {
+    assert(false && "never_timer is not for arming");
+  }
+  bool cancel() noexcept {
+    return false;
+  }
+  bool is_armed() const noexcept {
+    return false;
+  }
+  void set_callback(timer_callback_t) noexcept {
+  }
+};
+
 }  // namespace hidi
