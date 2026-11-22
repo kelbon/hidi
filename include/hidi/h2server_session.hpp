@@ -85,8 +85,6 @@ struct h2server_session : bi::list_base_hook<bi::link_mode<bi::safe_link>> {
   // marks client as not idle
   void received_frame() {
     ++framecount;
-    if (connection->pingdeadlinetimer.is_armed()) [[unlikely]]  // client not idle
-      connection->pingdeadlinetimer.cancel();
   }
 
   // creates new stream node, then server reader will collect request parts
