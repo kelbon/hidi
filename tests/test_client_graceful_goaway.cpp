@@ -12,7 +12,7 @@ CLIENT_TEST("client does not open new streams after graceful GOAWAY") {
   acceptor.listen();
   // если клиент не переподключится, то accept второго соединения завершится ошибкой и тест упадёт, а не
   // зависнет
-  any_timer watchdog = ioctx.create_timer();
+  any_timer watchdog = ioctx.create_timer(timer_precision::exact);
   watchdog.set_callback([&](bool canceled) {
     if (!canceled)
       acceptor.close();

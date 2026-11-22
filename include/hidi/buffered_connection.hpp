@@ -126,7 +126,7 @@ struct buffered_connection {
       // принятое уже считается записанным (например последние ответы и GOAWAY), поэтому его надо дописать.
       // Но если пир не читает, запись не завершится никогда, тогда ожидание прекращается по таймауту, а
       // зависшую запись прерывает shutdown внутреннего соединения
-      any_timer timer = io.create_timer();
+      any_timer timer = io.create_timer(timer_precision::coarse);
       timer.set_callback([this](bool canceled) {
         if (canceled)
           return;

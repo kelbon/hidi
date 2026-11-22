@@ -66,7 +66,7 @@ struct asio_ref_io {
   void restart() {
     return ioctx.restart();
   }
-  any_timer create_timer() {
+  any_timer create_timer(timer_precision) {
     return asio_timer(ioctx);
   }
   void attach(dd::task_node* n) {
