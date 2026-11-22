@@ -5,8 +5,6 @@ HTTP/2 implementation in C++20: client and server. Both fully conform to the spe
 
 [Русская версия](../../README.md)
 
-[![HTTP Arena H/2](https://img.shields.io/endpoint?url=https://http-arena.com/badge/hidi/h2.json)](https://http-arena.com/#scope=h2&type=engine&tuned=0)
-
 ## Getting started
 
 With [CPM](https://github.com/cpm-cmake/CPM.cmake):

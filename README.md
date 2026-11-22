@@ -5,8 +5,6 @@
 
 [English version](docs/en/README.md)
 
-[![HTTP Arena H/2](https://img.shields.io/endpoint?url=https://http-arena.com/badge/hidi/h2.json)](https://http-arena.com/#scope=h2&type=engine&tuned=0)
-
 ## Подключение
 
 Через [CPM](https://github.com/cpm-cmake/CPM.cmake):
